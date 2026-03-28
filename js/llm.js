@@ -1,4 +1,55 @@
 const LLM = {
+  // Backend API base URL (empty = same origin)
+  backendUrl: '',
+
+  // Try to fetch suggestions from the backend recipe database first
+  async _tryBackendSuggest(mealTypes, dietFilters, customRequest) {
+    try {
+      const profile = Store.getProfile();
+      const todayTotals = Store.getTodayTotals();
+      const remaining = {
+        calories: Math.max(0, profile.macros.calories - todayTotals.calories),
+        protein: Math.max(0, profile.macros.protein - todayTotals.protein),
+        carbs: Math.max(0, profile.macros.carbs - todayTotals.carbs),
+        fat: Math.max(0, profile.macros.fat - todayTotals.fat)
+      };
+      const prefs = Store.getPreferences();
+
+      const res = await fetch(`${this.backendUrl}/api/recipes/suggest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meal_types: Array.isArray(mealTypes) ? mealTypes : [mealTypes],
+          diet_filters: dietFilters || [],
+          goal: profile.goal || '',
+          remaining,
+          liked: prefs.liked || [],
+          disliked: prefs.disliked || []
+        })
+      });
+
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data.suggestions && data.suggestions.length > 0) {
+        return data;
+      }
+    } catch {
+      // Backend not available, fall through to LLM
+    }
+    return null;
+  },
+
+  // Fetch a full recipe from the backend database by ID
+  async _fetchBackendRecipe(recipeId) {
+    try {
+      const res = await fetch(`${this.backendUrl}/api/recipes/${recipeId}`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  },
+
   async call(messages, profile, maxTokens = 1500) {
     if (profile.apiProvider === 'anthropic') {
       return this._callClaude(messages, profile.apiKey, maxTokens);
@@ -212,6 +263,11 @@ Rules:
   },
 
   async getCoachSuggestion(mealTypes, dietFilters = [], customRequest = '') {
+    // Try backend database first (no API key needed)
+    const backendResult = await this._tryBackendSuggest(mealTypes, dietFilters, customRequest);
+    if (backendResult) return backendResult;
+
+    // Fallback to LLM generation
     const profile = Store.getProfile();
     if (!profile.apiKey) throw new Error('Please set your API key in Settings');
 
@@ -408,6 +464,27 @@ Suggest the best ${mealLabel} options to help hit remaining targets. Ensure vari
   },
 
   async generateRecipe(suggestion, dietFilters = []) {
+    // If suggestion came from backend DB, fetch the full recipe directly
+    if (suggestion.id && suggestion.has_recipe) {
+      const dbRecipe = await this._fetchBackendRecipe(suggestion.id);
+      if (dbRecipe) {
+        return {
+          name: dbRecipe.name,
+          prep_time: `${dbRecipe.prep_time_min || 0} min`,
+          cook_time: `${dbRecipe.cook_time_min || 0} min`,
+          servings: String(dbRecipe.servings || 1),
+          ingredients: dbRecipe.ingredients || [],
+          steps: dbRecipe.steps || [],
+          tips: dbRecipe.tips || '',
+          calories: dbRecipe.calories,
+          protein: dbRecipe.protein,
+          carbs: dbRecipe.carbs,
+          fat: dbRecipe.fat
+        };
+      }
+    }
+
+    // Fallback to LLM generation
     const profile = Store.getProfile();
     if (!profile.apiKey) throw new Error('Please set your API key in Settings');
 

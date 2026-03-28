@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fitcoach-v5';
+const CACHE_NAME = 'fitcoach-v6';
 const ASSETS = [
   '/index.html',
   '/css/style.css',
@@ -28,7 +28,7 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  if (e.request.url.includes('api.openai.com') || e.request.url.includes('api.anthropic.com')) {
+  if (e.request.url.includes('/api/') || e.request.url.includes('api.openai.com') || e.request.url.includes('api.anthropic.com')) {
     return;
   }
   e.respondWith(
