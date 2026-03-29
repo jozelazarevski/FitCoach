@@ -31,6 +31,23 @@ const LLM = {
       };
       const prefs = Store.getPreferences();
 
+      // Gather recent meal history (last 3 days) for variety
+      const recentMealNames = [];
+      for (let i = 0; i <= 3; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const key = d.toISOString().split('T')[0];
+        const dayMeals = Store.getDayMeals(key);
+        dayMeals.forEach(m => {
+          const name = m.description || m.items?.map(it => it.name).join(', ');
+          if (name) recentMealNames.push(name.toLowerCase());
+        });
+      }
+
+      // Count meals already eaten today to compute adaptive fraction
+      const todayMeals = Store.getTodayMeals();
+      const mealsEatenToday = todayMeals.length;
+
       const res = await fetch(`${this.backendUrl}/api/recipes/suggest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -40,7 +57,10 @@ const LLM = {
           goal: profile.goal || '',
           remaining,
           liked: prefs.liked || [],
-          disliked: prefs.disliked || []
+          disliked: prefs.disliked || [],
+          hour_of_day: new Date().getHours(),
+          recent_meal_names: recentMealNames,
+          meals_eaten_today: mealsEatenToday
         })
       });
 

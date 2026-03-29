@@ -1,5 +1,6 @@
+import json
 from flask import Blueprint, request, jsonify
-from backend.models import get_recipe, search_recipes, suggest_recipes
+from backend.models import get_recipe, search_recipes, suggest_recipes, recipe_to_dict
 
 recipes_bp = Blueprint('recipes', __name__)
 
@@ -45,6 +46,9 @@ def suggest():
         'remaining': data.get('remaining', {}),
         'liked': data.get('liked', []),
         'disliked': data.get('disliked', []),
+        'hour_of_day': data.get('hour_of_day'),
+        'recent_meal_names': data.get('recent_meal_names', []),
+        'meals_eaten_today': data.get('meals_eaten_today', 0),
     }
     results = suggest_recipes(context, limit=5)
     if not results:
@@ -62,9 +66,21 @@ def suggest():
     })
 
 
+def _extract_ingredient_words(recipe_dict):
+    """Extract normalized ingredient keywords from a recipe for overlap scoring."""
+    words = set()
+    for ing in recipe_dict.get('ingredients', []):
+        text = ing.lower() if isinstance(ing, str) else ing.get('item', '').lower()
+        # Strip quantities/units, keep meaningful food words (3+ chars)
+        for w in text.split():
+            if len(w) >= 3 and not w.replace('.', '').replace(',', '').isdigit():
+                words.add(w)
+    return words
+
+
 @recipes_bp.route('/meal-plan', methods=['POST'])
 def meal_plan():
-    """Generate a 7-day meal plan from DB recipes."""
+    """Generate a 7-day meal plan from DB recipes with ingredient overlap optimization."""
     data = request.get_json() or {}
     diet_filters = data.get('diet_filters', [])
     goal = data.get('goal', '')
@@ -78,10 +94,22 @@ def meal_plan():
     used_ids = set()
     plan = []
 
+    # Track all ingredient words across the plan for overlap scoring
+    plan_ingredients = set()
+
+    # Pre-fetch all candidate recipes so we can score ingredient overlap
+    from backend.db import get_db
+    db = get_db()
+    all_active = db.execute("SELECT * FROM recipes WHERE status = 'active'").fetchall()
+    db.close()
+    recipe_ingredients_cache = {}
+    for row in all_active:
+        rd = recipe_to_dict(dict(row))
+        recipe_ingredients_cache[rd['id']] = _extract_ingredient_words(rd)
+
     for day in days:
         meals = []
         for slot in meal_slots:
-            # Each meal targets ~25-30% of daily macros (snack gets less)
             fraction = 0.2 if slot == 'snack' else 0.27
             context = {
                 'meal_types': [slot],
@@ -94,7 +122,17 @@ def meal_plan():
                 'liked': liked,
                 'disliked': disliked
             }
-            results = suggest_recipes(context, limit=5)
+            results = suggest_recipes(context, limit=10)
+
+            # Re-rank candidates by ingredient overlap with existing plan
+            if plan_ingredients and results:
+                for r in results:
+                    r_ings = recipe_ingredients_cache.get(r['id'], set())
+                    overlap = len(r_ings & plan_ingredients)
+                    # Boost score: each shared ingredient word adds a small bonus
+                    r['_overlap_score'] = min(overlap * 2, 15)
+                results.sort(key=lambda r: -(r.get('_overlap_score', 0) + (10 - r['rank'])))
+
             # Pick one not already used
             pick = None
             for r in results:
@@ -105,7 +143,11 @@ def meal_plan():
                 pick = results[0]
             if not pick:
                 continue
+
             used_ids.add(pick['id'])
+            # Add this recipe's ingredients to the shared pool
+            plan_ingredients.update(recipe_ingredients_cache.get(pick['id'], set()))
+
             meals.append({
                 'type': slot,
                 'name': pick['name'],

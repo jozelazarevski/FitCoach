@@ -88,6 +88,36 @@ def search_recipes(filters=None, page=1, per_page=20):
             'pages': (count + per_page - 1) // per_page}
 
 
+def _time_appropriate_meals(hour):
+    """Map hour of day to appropriate meal types."""
+    if hour is None:
+        return []
+    if 5 <= hour < 11:
+        return ['breakfast', 'pre_workout']
+    elif 11 <= hour < 14:
+        return ['lunch', 'post_workout']
+    elif 14 <= hour < 17:
+        return ['snack', 'pre_workout']
+    elif 17 <= hour < 21:
+        return ['dinner', 'post_workout']
+    else:
+        return ['snack']
+
+
+def _adaptive_meal_fraction(meals_eaten_today):
+    """Return fraction of remaining macros to target for this meal.
+
+    Fewer meals eaten → smaller fraction (spread budget).
+    More meals eaten → larger fraction (use up what's left).
+    """
+    if meals_eaten_today is None:
+        return 0.4
+    # Assume a typical day has ~4 meals; estimate meals left
+    meals_left = max(1, 4 - meals_eaten_today)
+    # Target 1/meals_left of remaining, but cap between 0.25 and 0.8
+    return max(0.25, min(0.8, 1.0 / meals_left))
+
+
 def suggest_recipes(context, limit=5):
     """Score and rank recipes from DB based on user context."""
     db = get_db()
@@ -146,6 +176,15 @@ def suggest_recipes(context, limit=5):
     goal = context.get('goal', '')
     liked = [f.lower().strip() for f in context.get('liked', [])]
     disliked = [f.lower().strip() for f in context.get('disliked', [])]
+    hour_of_day = context.get('hour_of_day')
+    recent_meal_names = [n.lower() for n in context.get('recent_meal_names', [])]
+    meals_eaten_today = context.get('meals_eaten_today', 0)
+
+    # Compute adaptive fraction for macro targeting
+    meal_fraction = _adaptive_meal_fraction(meals_eaten_today)
+
+    # Determine time-appropriate meal types for bonus scoring
+    time_meals = _time_appropriate_meals(hour_of_day)
 
     for row in rows:
         recipe = recipe_to_dict(row)
@@ -157,13 +196,18 @@ def suggest_recipes(context, limit=5):
             if recipe.get('meal_type') in meal_types:
                 score += 30
             elif recipe.get('meal_type') == 'any':
-                score += 10  # 'any' type gets partial credit
+                score += 10
+
+        # Time-of-day bonus (+15) — boost recipes matching the current time
+        if time_meals and recipe.get('meal_type') in time_meals:
+            score += 15
+        elif time_meals and recipe.get('meal_type') == 'any':
+            score += 5
 
         # Goal alignment (+25)
         if goal and goal in rtags.get('goal', []):
             score += 25
         elif goal:
-            # Partial credit for related goals
             goal_map = {
                 'fat_loss': ['cutting', 'maintenance'],
                 'muscle_gain': ['bulking', 'lean_bulk', 'muscle_building'],
@@ -175,26 +219,40 @@ def suggest_recipes(context, limit=5):
             if any(g in rtags.get('goal', []) for g in related):
                 score += 12
 
-        # Macro fit (+20) - how well recipe fits remaining daily targets
+        # Macro fit (+20) — adaptive fraction based on meals remaining
         if remaining:
             rem_cal = remaining.get('calories', 500)
             rem_prot = remaining.get('protein', 30)
-            rem_carbs = remaining.get('carbs', 50)
-            rem_fat = remaining.get('fat', 20)
-            # Target ~40% of remaining per meal
             if rem_cal > 0:
-                target_cal = rem_cal * 0.4
+                target_cal = rem_cal * meal_fraction
                 cal_fit = max(0, 1 - abs(recipe['calories'] - target_cal) / max(rem_cal, 1))
                 score += cal_fit * 8
             if rem_prot > 0:
-                target_prot = rem_prot * 0.4
+                target_prot = rem_prot * meal_fraction
                 prot_fit = max(0, 1 - abs(recipe['protein'] - target_prot) / max(rem_prot, 1))
                 score += prot_fit * 8
-            # Bonus for not exceeding remaining
             if recipe['calories'] <= rem_cal and recipe['protein'] <= rem_prot:
                 score += 4
 
-        # Preference match - use word tokenization instead of substring
+        # Recent meal penalty (-30) — avoid what the user ate recently
+        if recent_meal_names:
+            name_lower = recipe['name'].lower()
+            name_words = set(name_lower.split())
+            for recent in recent_meal_names:
+                recent_words = recent.split()
+                # Penalize exact name match heavily, partial word overlap moderately
+                if name_lower == recent:
+                    score -= 30
+                    break
+                overlap = sum(1 for w in recent_words if len(w) > 3 and w in name_words)
+                if overlap >= 2:
+                    score -= 20
+                    break
+                elif overlap == 1 and len(recent_words) <= 3:
+                    score -= 10
+                    break
+
+        # Preference match — word tokenization
         name_lower = recipe['name'].lower()
         name_words = set(name_lower.split())
         ing_names = ' '.join(i.lower() if isinstance(i, str) else i.get('item', '').lower()
@@ -209,10 +267,10 @@ def suggest_recipes(context, limit=5):
         for disliked_food in disliked:
             disliked_words = disliked_food.split()
             if any(w in name_words for w in disliked_words) or disliked_food in ing_names:
-                score -= 100  # strong penalty, effectively excludes
+                score -= 100
                 break
 
-        # Cooking time bonus for quick meals
+        # Cooking time bonus
         if recipe.get('total_time_min', 60) <= 30:
             score += 3
 
@@ -243,7 +301,8 @@ def suggest_recipes(context, limit=5):
 def _generate_why(recipe, context, rank):
     reasons = []
     remaining = context.get('remaining', {})
-    goal = context.get('goal', '')
+    hour = context.get('hour_of_day')
+    meals_eaten = context.get('meals_eaten_today', 0)
 
     if rank == 0:
         rem_cal = remaining.get('calories', 0)
@@ -252,6 +311,19 @@ def _generate_why(recipe, context, rank):
             reasons.append(f"Best fit for your remaining {rem_cal}cal / {rem_prot}g protein")
         else:
             reasons.append("Best overall match for your goals")
+
+    # Time-of-day context
+    if hour is not None:
+        time_labels = _time_appropriate_meals(hour)
+        if recipe.get('meal_type') in time_labels:
+            if 5 <= hour < 11:
+                reasons.append("perfect for this morning")
+            elif 17 <= hour < 21:
+                reasons.append("great for tonight")
+
+    # Adaptive fraction context
+    if meals_eaten >= 3 and remaining.get('calories', 0) > 0:
+        reasons.append("helps use your remaining budget")
 
     if recipe['protein'] >= 35:
         reasons.append(f"packed with {recipe['protein']}g protein")
