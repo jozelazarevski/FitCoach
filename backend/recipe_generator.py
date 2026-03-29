@@ -114,7 +114,7 @@ Rules:
 - VARY the recipes - different proteins, vegetables, cooking methods, flavor profiles
 - Names should be appetizing and specific (not generic like "Chicken Dish #3")
 - Tags MUST be accurate. Only include tags that truly apply based on the recipe's ingredients, macros, and characteristics
-- For {category}: {"use ONLY plant-based ingredients, no animal products" if category == "vegan" else "use ONLY vegetarian ingredients, no meat/fish" if category == "vegetarian" else "feature " + category + " as the main protein"}
+- For {category}: {category_instruction}
 - Return ONLY the JSON array, no markdown fences or explanation"""
 
 GOAL_GUIDANCE = {
@@ -200,6 +200,13 @@ def create_batch(plan, batch_id=None):
 def generate_recipes_batch(client, prompt_info):
     """Call Claude API to generate a batch of recipes."""
     goal_guide = GOAL_GUIDANCE.get(prompt_info["goal"], "Balanced macros")
+    cat = prompt_info["category"]
+    if cat == "vegan":
+        cat_instruction = "use ONLY plant-based ingredients, no animal products"
+    elif cat == "vegetarian":
+        cat_instruction = "use ONLY vegetarian ingredients, no meat/fish"
+    else:
+        cat_instruction = f"feature {cat} as the main protein"
     prompt = PROMPT_TEMPLATE.format(
         count=prompt_info["count"],
         cuisine=prompt_info["cuisine"],
@@ -207,7 +214,8 @@ def generate_recipes_batch(client, prompt_info):
         meal_type=prompt_info["meal_type"],
         goal=prompt_info["goal"],
         difficulty=prompt_info["difficulty"],
-        goal_guidance=goal_guide
+        goal_guidance=goal_guide,
+        category_instruction=cat_instruction
     )
 
     response = client.messages.create(
