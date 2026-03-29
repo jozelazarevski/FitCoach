@@ -59,7 +59,14 @@ def suggest():
         'pantry': data.get('pantry', []),
         'workout_calories_today': data.get('workout_calories_today', 0),
         'has_recent_workout': data.get('has_recent_workout', False),
+        'is_recovery_day': data.get('is_recovery_day', False),
         'weight_trend': data.get('weight_trend', 'stable'),
+        'weight_change_rate': data.get('weight_change_rate', 0),
+        'weekly_macro_trend': data.get('weekly_macro_trend', {}),
+        'water_ml': data.get('water_ml', 0),
+        'water_target_ml': data.get('water_target_ml', 2300),
+        'days_with_logs': data.get('days_with_logs', 0),
+        'minutes_since_last_meal': data.get('minutes_since_last_meal'),
     }
     results = suggest_recipes(context, limit=5)
     if not results:

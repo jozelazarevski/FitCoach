@@ -48,7 +48,7 @@ const LLM = {
       const todayMeals = Store.getTodayMeals();
       const mealsEatenToday = todayMeals.length;
 
-      // Gather recent cuisines for diversity scoring
+      // Gather recent cuisines and protein sources for diversity scoring
       const recentCuisines = [];
       const recentProteinSources = [];
       for (let i = 0; i <= 3; i++) {
@@ -62,31 +62,78 @@ const LLM = {
         });
       }
 
-      // Workout data for post-workout awareness
+      // Workout data with timestamps for pre/post-workout targeting
       const todayWorkoutCals = Store.getTodayWorkoutCalories();
       const todayWorkouts = Store.getTodayWorkouts();
+      const now = Date.now();
       const hasRecentWorkout = todayWorkouts.some(w => {
         const wTime = new Date(w.time);
-        return (Date.now() - wTime.getTime()) < 3 * 60 * 60 * 1000; // within 3 hours
+        return (now - wTime.getTime()) < 3 * 60 * 60 * 1000;
       });
+      // Detect if there's an upcoming workout (within next 2h) based on patterns
+      const hasUpcomingWorkout = todayWorkouts.length === 0 && Store.getTodayWorkoutCalories() === 0;
+      // Check yesterday's workout for recovery day detection
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayKey = yesterday.toISOString().split('T')[0];
+      const yesterdayWorkouts = Store.getDayWorkouts ? Store.getDayWorkouts(yesterdayKey) : [];
+      const isRecoveryDay = yesterdayWorkouts.length > 0 && todayWorkouts.length === 0;
 
-      // Body trend for plateau detection
+      // Body trend for plateau detection — use more data points
       const bodyLog = Store.getBodyLog();
       let weightTrend = 'stable';
+      let weightChangeRate = 0;
       if (bodyLog.length >= 3) {
-        const recent = bodyLog.slice(-3);
-        const diff = recent[recent.length - 1].weight - recent[0].weight;
-        if (Math.abs(diff) < 0.3) weightTrend = 'plateau';
+        const recent = bodyLog.slice(-5);
+        const first = recent[0].weight;
+        const last = recent[recent.length - 1].weight;
+        const diff = last - first;
+        const days = Math.max(1, (new Date(recent[recent.length - 1].date) - new Date(recent[0].date)) / 86400000);
+        weightChangeRate = (diff / days) * 7; // kg per week
+        if (Math.abs(diff) < 0.3 && recent.length >= 3) weightTrend = 'plateau';
         else if (diff > 0) weightTrend = 'gaining';
         else weightTrend = 'losing';
       }
+
+      // Weekly macro averages for trajectory correction
+      const weekAvg = Store.getWeekAverage();
+      const weeklyMacroTrend = {};
+      if (weekAvg && weekAvg.days >= 3) {
+        weeklyMacroTrend.avg_calories = weekAvg.calories;
+        weeklyMacroTrend.avg_protein = weekAvg.protein;
+        weeklyMacroTrend.avg_carbs = weekAvg.carbs;
+        weeklyMacroTrend.avg_fat = weekAvg.fat;
+        weeklyMacroTrend.days_tracked = weekAvg.days;
+        weeklyMacroTrend.target_calories = profile.macros.calories;
+        weeklyMacroTrend.target_protein = profile.macros.protein;
+        weeklyMacroTrend.target_carbs = profile.macros.carbs;
+        weeklyMacroTrend.target_fat = profile.macros.fat;
+      }
+
+      // Hydration data
+      const todayWater = Store.getWater ? Store.getWater(Store.getTodayKey()) : 0;
+      const waterTarget = (profile.weight || 70) * 33; // ml per day
+
+      // User experience level (days with logged meals)
+      const allDays = Store.getAllDays();
+      const daysWithLogs = allDays.length;
 
       // Fiber and sugar tracking
       const remainingFull = {
         ...remaining,
         fiber: Math.max(0, 25 - (todayTotals.fiber || 0)),
-        sugar_processed: todayTotals.sugar_processed || 0
+        sugar_processed: todayTotals.sugar_processed || 0,
+        sugar_natural: todayTotals.sugar_natural || 0
       };
+
+      // Time since last meal (hunger signal)
+      let minutesSinceLastMeal = null;
+      if (todayMeals.length > 0) {
+        const lastMeal = todayMeals[todayMeals.length - 1];
+        if (lastMeal.time) {
+          minutesSinceLastMeal = Math.round((now - new Date(lastMeal.time).getTime()) / 60000);
+        }
+      }
 
       const res = await fetch(`${this.backendUrl}/api/recipes/suggest`, {
         method: 'POST',
@@ -111,7 +158,14 @@ const LLM = {
           pantry: Store.getPantry(),
           workout_calories_today: todayWorkoutCals,
           has_recent_workout: hasRecentWorkout,
-          weight_trend: weightTrend
+          is_recovery_day: isRecoveryDay,
+          weight_trend: weightTrend,
+          weight_change_rate: weightChangeRate,
+          weekly_macro_trend: weeklyMacroTrend,
+          water_ml: todayWater,
+          water_target_ml: waterTarget,
+          days_with_logs: daysWithLogs,
+          minutes_since_last_meal: minutesSinceLastMeal
         })
       });
 
