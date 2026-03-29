@@ -31,36 +31,28 @@ const LLM = {
       };
       const prefs = Store.getPreferences();
 
-      // Gather recent meal history (last 3 days) for variety
+      // Gather recent meal history (last 3 days) — single pass for names, cuisines, proteins
       const recentMealNames = [];
+      const recentCuisines = [];
+      const recentProteinSources = [];
+      const data = Store.load();
+      const todayKey = Store.getTodayKey();
       for (let i = 0; i <= 3; i++) {
         const d = new Date();
         d.setDate(d.getDate() - i);
         const key = d.toISOString().split('T')[0];
-        const dayMeals = Store.getDayMeals(key);
+        const dayMeals = data.logs[key]?.meals || [];
         dayMeals.forEach(m => {
           const name = m.description || m.items?.map(it => it.name).join(', ');
           if (name) recentMealNames.push(name.toLowerCase());
-        });
-      }
-
-      // Count meals already eaten today to compute adaptive fraction
-      const todayMeals = Store.getTodayMeals();
-      const mealsEatenToday = todayMeals.length;
-
-      // Gather recent cuisines and protein sources for diversity scoring
-      const recentCuisines = [];
-      const recentProteinSources = [];
-      for (let i = 0; i <= 3; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const key = d.toISOString().split('T')[0];
-        const dayMeals = Store.getDayMeals(key);
-        dayMeals.forEach(m => {
           if (m.cuisine) recentCuisines.push(m.cuisine.toLowerCase());
           if (m.protein_source) recentProteinSources.push(m.protein_source.toLowerCase());
         });
       }
+
+      // Count meals already eaten today to compute adaptive fraction
+      const todayMeals = data.logs[todayKey]?.meals || [];
+      const mealsEatenToday = todayMeals.length;
 
       // Workout data with timestamps for pre/post-workout targeting
       const todayWorkoutCals = Store.getTodayWorkoutCalories();

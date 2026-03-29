@@ -1,5 +1,7 @@
 const Store = {
   KEY: 'fitcoach_data',
+  _cache: null,
+  _cacheRaw: null,
 
   _defaults() {
     return {
@@ -36,15 +38,23 @@ const Store = {
     try {
       const raw = localStorage.getItem(this.KEY);
       if (!raw) return this._defaults();
+      // Return cached version if localStorage hasn't changed
+      if (this._cache && raw === this._cacheRaw) return this._cache;
       const data = JSON.parse(raw);
-      return { ...this._defaults(), ...data, profile: { ...this._defaults().profile, ...data.profile } };
+      this._cache = { ...this._defaults(), ...data, profile: { ...this._defaults().profile, ...data.profile } };
+      this._cacheRaw = raw;
+      return this._cache;
     } catch {
       return this._defaults();
     }
   },
 
   save(data) {
-    localStorage.setItem(this.KEY, JSON.stringify(data));
+    const raw = JSON.stringify(data);
+    localStorage.setItem(this.KEY, raw);
+    // Update cache directly — avoid re-parsing on next load()
+    this._cache = data;
+    this._cacheRaw = raw;
   },
 
   getProfile() {
@@ -182,19 +192,21 @@ const Store = {
   },
 
   getWeekAverage() {
+    const data = this.load();
     const today = new Date();
     const totals = { calories: 0, protein: 0, carbs: 0, fat: 0, days: 0 };
     for (let i = 0; i < 7; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
       const key = d.toISOString().split('T')[0];
-      const dayMeals = this.getDayMeals(key);
-      if (dayMeals.length > 0) {
-        const dt = this.getDayTotals(key);
-        totals.calories += dt.calories;
-        totals.protein += dt.protein;
-        totals.carbs += dt.carbs;
-        totals.fat += dt.fat;
+      const meals = data.logs[key]?.meals || [];
+      if (meals.length > 0) {
+        meals.forEach(m => {
+          totals.calories += m.total?.calories || 0;
+          totals.protein += m.total?.protein || 0;
+          totals.carbs += m.total?.carbs || 0;
+          totals.fat += m.total?.fat || 0;
+        });
         totals.days++;
       }
     }

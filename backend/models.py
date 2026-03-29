@@ -17,14 +17,26 @@ def recipe_to_dict(row):
 
 def get_recipe(recipe_id):
     with use_db() as db:
-        row = db.execute("SELECT * FROM recipes WHERE id = ? AND status = 'active'", (recipe_id,)).fetchone()
+        # Single query: recipe + all tags via GROUP_CONCAT
+        row = db.execute("""
+            SELECT r.*,
+                   GROUP_CONCAT(rt.dimension || ':' || rt.tag, '||') as _tag_str
+            FROM recipes r
+            LEFT JOIN recipe_tags rt ON rt.recipe_id = r.id
+            WHERE r.id = ? AND r.status = 'active'
+            GROUP BY r.id
+        """, (recipe_id,)).fetchone()
         if not row:
             return None
         recipe = recipe_to_dict(row)
-        tags = db.execute("SELECT dimension, tag FROM recipe_tags WHERE recipe_id = ?", (recipe_id,)).fetchall()
+        # Parse concatenated tags
         recipe['tags'] = {}
-        for t in tags:
-            recipe['tags'].setdefault(t['dimension'], []).append(t['tag'])
+        tag_str = recipe.pop('_tag_str', None)
+        if tag_str:
+            for pair in tag_str.split('||'):
+                dim, _, tag = pair.partition(':')
+                if dim and tag:
+                    recipe['tags'].setdefault(dim, []).append(tag)
         return recipe
 
 
@@ -207,6 +219,12 @@ def suggest_recipes(context, limit=5):
       Budget:      cost awareness +5
       Jitter:      random +0-5
     """
+    # Select only columns needed for scoring — skip heavy JSON blobs (steps, tips)
+    _SCORE_COLS = ("r.id, r.name, r.category, r.cuisine, r.meal_type, r.difficulty, "
+                   "r.calories, r.protein, r.carbs, r.fat, r.fiber, r.sugar, "
+                   "r.total_time_min, r.prep_time_min, r.cook_time_min, r.servings, "
+                   "r.ingredients, r.allergens, r.meal_prep_friendly, r.description")
+
     with use_db() as db:
         conditions = ["r.status = 'active'"]
         params = []
@@ -233,7 +251,7 @@ def suggest_recipes(context, limit=5):
 
         where = " AND ".join(conditions)
         rows = db.execute(
-            f"SELECT * FROM recipes r WHERE {where} LIMIT 200", params
+            f"SELECT {_SCORE_COLS} FROM recipes r WHERE {where} LIMIT 200", params
         ).fetchall()
 
         recipe_ids = [r['id'] for r in rows]
@@ -342,23 +360,42 @@ def suggest_recipes(context, limit=5):
     very_hungry = mins_since_meal is not None and mins_since_meal > 300  # 5+ hours
 
     # ═══════════════════════════════════════════════════
+    # Pre-parse lightweight recipe dicts for scoring
+    # Only parse ingredients/allergens JSON, skip steps/tips
+    # ═══════════════════════════════════════════════════
+    _json_fields = ('ingredients', 'allergens')
+    parsed_recipes = []
+    for row in rows:
+        r = dict(row)
+        for field in _json_fields:
+            if r.get(field) and isinstance(r[field], str):
+                try:
+                    r[field] = json.loads(r[field])
+                except (json.JSONDecodeError, TypeError):
+                    r[field] = []
+        # Pre-compute ingredient text once per recipe (used in allergens, preferences, pantry)
+        ings = r.get('ingredients', [])
+        r['_ing_text'] = ' '.join(
+            i.lower() if isinstance(i, str) else i.get('item', '').lower()
+            for i in ings
+        )
+        parsed_recipes.append(r)
+
+    # ═══════════════════════════════════════════════════
     # Score each recipe
     # ═══════════════════════════════════════════════════
     scored = []
-    for row in rows:
-        recipe = recipe_to_dict(row)
+    for recipe in parsed_recipes:
         rtags = tags_by_recipe.get(recipe['id'], {})
         score = 0.0
+        ing_text = recipe['_ing_text']
 
         # ── 1. Allergen hard-exclude (-1000) ──
         if excluded_allergens:
             recipe_allergens = {a.lower() for a in recipe.get('allergens', [])}
-            ing_text = ' '.join(i.lower() if isinstance(i, str) else i.get('item', '').lower()
-                                for i in recipe.get('ingredients', []))
             if recipe_allergens & excluded_allergens:
                 score -= 1000
             else:
-                # Also check ingredient text for allergen keywords
                 for allergen in excluded_allergens:
                     if allergen in ing_text:
                         score -= 1000
@@ -555,12 +592,9 @@ def suggest_recipes(context, limit=5):
                     break
 
         # ── 14. Preference match with recency weighting (+15 / -100) ──
-        ing_names = ' '.join(i.lower() if isinstance(i, str) else i.get('item', '').lower()
-                            for i in recipe.get('ingredients', []))
-
         for idx, liked_food in enumerate(liked):
             liked_words = liked_food.split()
-            if any(w in name_words for w in liked_words) or liked_food in ing_names:
+            if any(w in name_words for w in liked_words) or liked_food in ing_text:
                 # More recent preferences (later in array) get higher weight
                 recency = 0.5 + 0.5 * (idx / max(len(liked), 1))
                 score += 15 * recency
@@ -568,13 +602,13 @@ def suggest_recipes(context, limit=5):
 
         for disliked_food in disliked:
             disliked_words = disliked_food.split()
-            if any(w in name_words for w in disliked_words) or disliked_food in ing_names:
+            if any(w in name_words for w in disliked_words) or disliked_food in ing_text:
                 score -= 100
                 break
 
         # ── 15. Pantry match with coverage ratio (+15) ──
         if pantry:
-            pantry_hits = sum(1 for p in pantry if p in ing_names)
+            pantry_hits = sum(1 for p in pantry if p in ing_text)
             score += min(pantry_hits * 3, 12)
             # Bonus if pantry covers most ingredients
             ing_count_tags = rtags.get('ingredient_count', [])
@@ -688,7 +722,7 @@ def suggest_recipes(context, limit=5):
             'id': recipe['id'],
             'name': recipe['name'],
             'description': recipe.get('description', ''),
-            'why': _generate_why(recipe, context, i),
+            'why': _generate_why(recipe, context, i, recipe.get('_ing_text', '')),
             'calories': recipe['calories'],
             'protein': recipe['protein'],
             'carbs': recipe['carbs'],
@@ -698,7 +732,7 @@ def suggest_recipes(context, limit=5):
     return results
 
 
-def _generate_why(recipe, context, rank):
+def _generate_why(recipe, context, rank, ing_text=''):
     reasons = []
     remaining = context.get('remaining', {})
     hour = context.get('hour_of_day')
@@ -817,8 +851,6 @@ def _generate_why(recipe, context, rank):
 
     # Pantry match
     if pantry:
-        ing_text = ' '.join(i.lower() if isinstance(i, str) else i.get('item', '').lower()
-                            for i in recipe.get('ingredients', []))
         hits = [p for p in pantry if p.lower() in ing_text]
         if len(hits) >= 3:
             reasons.append(f"uses {', '.join(hits[:3])} from your pantry")

@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS recipe_tags (
 
 CREATE INDEX IF NOT EXISTS idx_tags_dim_tag ON recipe_tags(dimension, tag);
 CREATE INDEX IF NOT EXISTS idx_tags_recipe ON recipe_tags(recipe_id);
+CREATE INDEX IF NOT EXISTS idx_tags_recipe_dim ON recipe_tags(recipe_id, dimension, tag);
 CREATE INDEX IF NOT EXISTS idx_recipes_meal ON recipes(meal_type);
 CREATE INDEX IF NOT EXISTS idx_recipes_cuisine ON recipes(cuisine);
 CREATE INDEX IF NOT EXISTS idx_recipes_category ON recipes(category);
@@ -56,7 +57,8 @@ CREATE INDEX IF NOT EXISTS idx_recipes_calories ON recipes(calories);
 CREATE INDEX IF NOT EXISTS idx_recipes_protein ON recipes(protein);
 CREATE INDEX IF NOT EXISTS idx_recipes_status_meal ON recipes(status, meal_type);
 CREATE INDEX IF NOT EXISTS idx_recipes_status_cal ON recipes(status, calories);
-CREATE INDEX IF NOT EXISTS idx_queue_batch_status ON generation_queue(batch_id, status);
+CREATE INDEX IF NOT EXISTS idx_recipes_difficulty ON recipes(difficulty);
+CREATE INDEX IF NOT EXISTS idx_recipes_name ON recipes(name);
 
 CREATE TABLE IF NOT EXISTS generation_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,6 +83,8 @@ CREATE TABLE IF NOT EXISTS generation_queue (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(batch_id, prompt_key)
 );
+
+CREATE INDEX IF NOT EXISTS idx_queue_batch_status ON generation_queue(batch_id, status);
 
 CREATE TABLE IF NOT EXISTS admin_sessions (
     token TEXT PRIMARY KEY,
