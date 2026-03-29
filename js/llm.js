@@ -1,6 +1,22 @@
 const LLM = {
   // Backend API base URL (empty = same origin)
   backendUrl: '',
+  _backendAvailable: null,
+
+  // Check if the backend server is running
+  async checkBackend() {
+    if (this._backendAvailable !== null) return this._backendAvailable;
+    try {
+      const res = await fetch(`${this.backendUrl}/api/health`, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        const data = await res.json();
+        this._backendAvailable = data.status === 'ok';
+        return this._backendAvailable;
+      }
+    } catch {}
+    this._backendAvailable = false;
+    return false;
+  },
 
   // Try to fetch suggestions from the backend recipe database first
   async _tryBackendSuggest(mealTypes, dietFilters, customRequest) {

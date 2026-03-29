@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fitcoach-v6';
+const CACHE_NAME = 'fitcoach-v7';
 const ASSETS = [
   '/index.html',
   '/css/style.css',
@@ -6,6 +6,7 @@ const ASSETS = [
   '/js/storage.js',
   '/js/llm.js',
   '/js/tracker.js',
+  '/js/recipes.js',
   '/js/coach.js',
   '/js/profile.js',
   '/js/ui.js',

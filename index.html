@@ -20,6 +20,7 @@
     <div class="screens">
       <div class="screen active" id="screen-dashboard"></div>
       <div class="screen" id="screen-coach"></div>
+      <div class="screen" id="screen-recipes"></div>
       <div class="screen" id="screen-body"></div>
       <div class="screen" id="screen-history"></div>
       <div class="screen" id="screen-profile"></div>
@@ -40,6 +41,13 @@
           <path d="M2 12l10 5 10-5"/>
         </svg>
         Coach
+      </button>
+      <button class="nav-btn" data-screen="recipes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/>
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+        </svg>
+        Recipes
       </button>
       <button class="nav-btn" data-screen="body">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -80,6 +88,7 @@
   <script src="js/llm.js"></script>
   <script src="js/profile.js"></script>
   <script src="js/tracker.js"></script>
+  <script src="js/recipes.js"></script>
   <script src="js/coach.js"></script>
   <script src="js/body.js"></script>
   <script src="js/app.js"></script>

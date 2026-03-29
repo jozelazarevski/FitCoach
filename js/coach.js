@@ -205,17 +205,12 @@ const Coach = {
 
   async getSuggestion() {
     const profile = Store.getProfile();
-    if (!profile.apiKey) {
-      UI.toast('Set your API key in Profile first', 'error');
-      App.navigate('profile');
-      return;
-    }
     if (this.selectedMealTypes.length === 0) {
       UI.toast('Pick at least one meal type', 'error');
       return;
     }
 
-    UI.showLoading('Your coach is thinking...');
+    UI.showLoading('Finding the best meals for you...');
 
     this.customRequest = UI.$('#coach-custom')?.value.trim() || '';
     const pantry = Store.getPantry();
@@ -241,12 +236,16 @@ const Coach = {
 
   showSuggestions(result) {
     const container = UI.$('#coach-results');
+    const isDb = result.source === 'database';
     container.innerHTML = `
       ${result.top_pick_reason ? `<div class="top-pick-banner"><div class="top-pick-label">Why #1 is your best pick right now</div><div class="top-pick-text">${result.top_pick_reason}</div></div>` : ''}
       ${result.reasoning ? `<div class="coach-reasoning">${result.reasoning}</div>` : ''}
       ${result.suggestions.map((s, i) => `
         <div class="suggestion-card ${i === 0 ? 'top-pick' : ''}" id="suggestion-${i}">
-          <div class="suggestion-rank-badge">${i === 0 ? '#1 Best Pick' : `#${s.rank || i + 1}`}</div>
+          <div class="suggestion-rank-badge">
+            ${i === 0 ? '#1 Best Pick' : `#${s.rank || i + 1}`}
+            <span class="sug-source ${isDb ? 'sug-source-db' : 'sug-source-ai'}">${isDb ? 'DB' : 'AI'}</span>
+          </div>
           <div class="suggestion-header">
             <div class="suggestion-title">${s.name}</div>
             <div class="suggestion-actions">
@@ -263,7 +262,7 @@ const Coach = {
             <span style="color:var(--fat-color)">${s.fat}g F</span>
           </div>
           <div class="suggestion-btn-row">
-            <button class="btn btn-recipe" data-index="${i}">View Recipe</button>
+            <button class="btn btn-recipe ${s.has_recipe ? 'instant' : ''}" data-index="${i}">${s.has_recipe ? 'View Recipe' : 'Generate Recipe'}</button>
             <button class="btn btn-log-suggestion" data-index="${i}">I ate this</button>
           </div>
           <div class="recipe-content" id="recipe-${i}"></div>
@@ -348,7 +347,16 @@ const Coach = {
 
   async generateMealPlan() {
     const profile = Store.getProfile();
-    if (!profile.apiKey) { UI.toast('Set API key first', 'error'); return; }
+
+    // Try DB-powered meal plan first
+    const dbPlan = await this._tryDbMealPlan(profile);
+    if (dbPlan) {
+      this._renderMealPlan(dbPlan);
+      return;
+    }
+
+    // Fallback to LLM
+    if (!profile.apiKey) { UI.toast('No recipes in database and no API key set', 'error'); return; }
 
     UI.showLoading('Generating your weekly plan...');
     const pantry = Store.getPantry();
@@ -390,40 +398,85 @@ ${this.selectedDietFilters.length > 0 ? `- Diet: ${this.selectedDietFilters.join
       const response = await LLM.call(messages, profile, 4000);
       const cleaned = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       const result = JSON.parse(cleaned);
-
-      const container = UI.$('#coach-results');
-      container.innerHTML = `
-        <div class="card-title" style="margin-bottom:12px">Your Weekly Meal Plan</div>
-        ${result.plan.map(day => `
-          <div class="card meal-plan-day">
-            <div class="meal-plan-day-title">${day.day}</div>
-            ${day.meals.map(m => `
-              <div class="meal-plan-item">
-                <div class="meal-plan-type">${m.type}</div>
-                <div class="meal-plan-name">${m.name}</div>
-                <div class="meal-plan-desc">${m.description}</div>
-                <div class="suggestion-macros" style="margin-top:4px">
-                  <span style="color:var(--cal-color)">${m.calories}cal</span>
-                  <span style="color:var(--protein-color)">${m.protein}gP</span>
-                  <span style="color:var(--carb-color)">${m.carbs}gC</span>
-                  <span style="color:var(--fat-color)">${m.fat}gF</span>
-                </div>
-              </div>
-            `).join('')}
-            <div class="meal-plan-day-total">
-              Day total: ${day.meals.reduce((s,m) => s+m.calories, 0)} cal /
-              ${day.meals.reduce((s,m) => s+m.protein, 0)}g P /
-              ${day.meals.reduce((s,m) => s+m.carbs, 0)}g C /
-              ${day.meals.reduce((s,m) => s+m.fat, 0)}g F
-            </div>
-          </div>
-        `).join('')}
-      `;
+      this._renderMealPlan({ plan: result.plan, source: 'ai' });
     } catch (err) {
       UI.toast(err.message || 'Failed to generate plan', 'error');
     } finally {
       UI.hideLoading();
     }
+  },
+
+  async _tryDbMealPlan(profile) {
+    try {
+      UI.showLoading('Building your weekly plan from recipes...');
+      const prefs = Store.getPreferences();
+      const res = await fetch('/api/recipes/meal-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          diet_filters: this.selectedDietFilters,
+          goal: profile.goal || '',
+          target_calories: profile.macros.calories || 2000,
+          target_protein: profile.macros.protein || 150,
+          liked: prefs.liked || [],
+          disliked: prefs.disliked || []
+        })
+      });
+      UI.hideLoading();
+      if (!res.ok) return null;
+      const data = await res.json();
+      // Verify we got enough meals
+      const totalMeals = data.plan?.reduce((s, d) => s + (d.meals?.length || 0), 0) || 0;
+      if (totalMeals < 14) return null; // Need at least 2 meals per day
+      return data;
+    } catch {
+      UI.hideLoading();
+      return null;
+    }
+  },
+
+  _renderMealPlan(result) {
+    const container = UI.$('#coach-results');
+    container.innerHTML = `
+      <div class="card-title" style="margin-bottom:12px">
+        Your Weekly Meal Plan
+        ${result.source === 'database' ? '<span class="sug-source sug-source-db" style="margin-left:8px">From Recipe DB</span>' : ''}
+      </div>
+      ${result.plan.map(day => `
+        <div class="card meal-plan-day">
+          <div class="meal-plan-day-title">${day.day}</div>
+          ${day.meals.map(m => `
+            <div class="meal-plan-item" ${m.recipe_id ? `data-recipe-id="${m.recipe_id}" style="cursor:pointer"` : ''}>
+              <div class="meal-plan-type">${m.type}</div>
+              <div class="meal-plan-name">${m.name}</div>
+              <div class="meal-plan-desc">${m.description}</div>
+              <div class="suggestion-macros" style="margin-top:4px">
+                <span style="color:var(--cal-color)">${m.calories}cal</span>
+                <span style="color:var(--protein-color)">${m.protein}gP</span>
+                <span style="color:var(--carb-color)">${m.carbs}gC</span>
+                <span style="color:var(--fat-color)">${m.fat}gF</span>
+              </div>
+            </div>
+          `).join('')}
+          <div class="meal-plan-day-total">
+            Day total: ${day.meals.reduce((s,m) => s+m.calories, 0)} cal /
+            ${day.meals.reduce((s,m) => s+m.protein, 0)}g P /
+            ${day.meals.reduce((s,m) => s+m.carbs, 0)}g C /
+            ${day.meals.reduce((s,m) => s+m.fat, 0)}g F
+          </div>
+        </div>
+      `).join('')}
+    `;
+
+    // Click on meal plan items to view recipe detail
+    container.querySelectorAll('.meal-plan-item[data-recipe-id]').forEach(item => {
+      item.addEventListener('click', () => {
+        const id = +item.dataset.recipeId;
+        if (id && typeof Recipes !== 'undefined') {
+          Recipes.showDetail(id);
+        }
+      });
+    });
   },
 
   _bindLogSuggestions() {
