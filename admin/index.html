@@ -553,6 +553,7 @@
                 <select id="ak-provider">
                   <option value="anthropic">Anthropic (Claude)</option>
                   <option value="openai">OpenAI</option>
+                  <option value="ollama">Ollama (Local)</option>
                 </select>
               </div>
               <div class="form-group">
@@ -562,7 +563,7 @@
             </div>
             <div class="form-row">
               <div class="form-group">
-                <label>API Key</label>
+                <label>API Key <span id="ak-key-hint" style="font-weight:normal;color:var(--dim)">(sk-...)</span></label>
                 <input type="password" id="ak-key" placeholder="sk-...">
               </div>
               <div class="form-group">
@@ -601,10 +602,31 @@
         <p style="font-size:12px;color:var(--dim);margin-top:12px">API keys stored in the database are used by the recipe generator. You can also set ANTHROPIC_API_KEY as an environment variable.</p>
       `;
 
+      // Update hints when provider changes
+      document.getElementById('ak-provider').onchange = () => {
+        const prov = document.getElementById('ak-provider').value;
+        const keyInput = document.getElementById('ak-key');
+        const keyHint = document.getElementById('ak-key-hint');
+        const modelInput = document.getElementById('ak-model');
+        if (prov === 'ollama') {
+          keyInput.placeholder = 'http://localhost:11434';
+          keyHint.textContent = '(Ollama URL)';
+          modelInput.placeholder = 'llama3.1';
+        } else if (prov === 'openai') {
+          keyInput.placeholder = 'sk-...';
+          keyHint.textContent = '(sk-...)';
+          modelInput.placeholder = 'gpt-4o-mini';
+        } else {
+          keyInput.placeholder = 'sk-ant-...';
+          keyHint.textContent = '(sk-ant-...)';
+          modelInput.placeholder = 'claude-haiku-4-5-20251001';
+        }
+      };
+
       document.getElementById('btn-add-key').onclick = async () => {
         const provider = document.getElementById('ak-provider').value;
         const keyVal = document.getElementById('ak-key').value.trim();
-        if (!keyVal) { toast('API key required', true); return; }
+        if (!keyVal) { toast(provider === 'ollama' ? 'Ollama URL required' : 'API key required', true); return; }
         try {
           await api('/api-keys', {
             method: 'POST',
@@ -687,7 +709,26 @@
         <div class="stats-grid">
           <div class="stat-card">
             <div class="stat-label">Start New Generation</div>
-            <p style="font-size:13px;color:var(--dim);margin:12px 0">Generate recipes using Claude API. Each API call produces multiple recipes.</p>
+            <p style="font-size:13px;color:var(--dim);margin:12px 0">Generate recipes using an LLM. Each API call produces multiple recipes.</p>
+            <div class="form-row" style="margin-bottom:12px">
+              <div class="form-group">
+                <label>Provider</label>
+                <select id="gen-provider">
+                  <option value="anthropic">Anthropic (Claude)</option>
+                  <option value="ollama">Ollama (Local)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Model</label>
+                <select id="gen-model">
+                  <option value="">Default (from API key config)</option>
+                  <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                  <option value="claude-opus-4-6">Claude Opus 4.6</option>
+                </select>
+                <input type="text" id="gen-model-custom" placeholder="Or type custom model name..." style="margin-top:4px">
+              </div>
+            </div>
             <div class="form-row" style="margin-bottom:12px">
               <div class="form-group">
                 <label>Recipes per API call</label>
@@ -719,18 +760,53 @@
         }, 5000);
       }
 
+      // Switch model options when provider changes
+      document.getElementById('gen-provider').onchange = () => {
+        const prov = document.getElementById('gen-provider').value;
+        const modelSelect = document.getElementById('gen-model');
+        const customInput = document.getElementById('gen-model-custom');
+        if (prov === 'ollama') {
+          modelSelect.innerHTML = `
+            <option value="">Default (from config)</option>
+            <option value="llama3.1">Llama 3.1</option>
+            <option value="llama3.2">Llama 3.2</option>
+            <option value="mistral">Mistral</option>
+            <option value="mixtral">Mixtral</option>
+            <option value="qwen2.5">Qwen 2.5</option>
+            <option value="gemma2">Gemma 2</option>
+            <option value="deepseek-r1">DeepSeek R1</option>
+            <option value="phi3">Phi-3</option>
+          `;
+          customInput.placeholder = 'Or type Ollama model name...';
+        } else {
+          modelSelect.innerHTML = `
+            <option value="">Default (from API key config)</option>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+            <option value="claude-opus-4-6">Claude Opus 4.6</option>
+          `;
+          customInput.placeholder = 'Or type custom model name...';
+        }
+      };
+
       document.getElementById('btn-start-gen').onclick = async () => {
         const batchSize = +document.getElementById('gen-batch-size').value || 10;
         const maxItems = document.getElementById('gen-max-items').value ? +document.getElementById('gen-max-items').value : null;
+        const provider = document.getElementById('gen-provider').value;
+        const modelSelect = document.getElementById('gen-model').value;
+        const modelCustom = document.getElementById('gen-model-custom').value.trim();
+        const model = modelCustom || modelSelect || null;
 
-        if (!confirm(`Start generating recipes? Batch size: ${batchSize}, Max combos: ${maxItems || 'all'}`)) return;
+        const providerLabel = provider === 'ollama' ? 'Ollama' : 'Claude';
+        const modelLabel = model || 'default';
+        if (!confirm(`Start generating recipes?\nProvider: ${providerLabel}\nModel: ${modelLabel}\nBatch size: ${batchSize}\nMax combos: ${maxItems || 'all'}`)) return;
 
         try {
           const result = await api('/generate/start', {
             method: 'POST',
-            body: JSON.stringify({ batch_size: batchSize, max_items: maxItems })
+            body: JSON.stringify({ batch_size: batchSize, max_items: maxItems, provider, model })
           });
-          toast(`Generation started: ${result.batch_id}`);
+          toast(`Generation started: ${result.batch_id} (${providerLabel})`);
           setTimeout(() => renderGenerate(el), 2000);
         } catch (e) { toast(e.message, true); }
       };

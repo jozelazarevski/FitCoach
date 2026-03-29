@@ -14,7 +14,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import ANTHROPIC_API_KEY, RECIPES_PER_API_CALL, MAX_RETRIES
+from config import ANTHROPIC_API_KEY, RECIPES_PER_API_CALL, MAX_RETRIES, OLLAMA_BASE_URL, OLLAMA_MODEL
 from backend.db import get_db, use_db, init_db
 from backend.models import insert_recipe
 from backend.tag_engine import detect_cuisine, compute_tags, compute_deterministic_tags
@@ -23,6 +23,11 @@ try:
     import anthropic
 except ImportError:
     anthropic = None
+
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None
 
 # Recipe generation matrix
 CUISINES = [
@@ -197,8 +202,8 @@ def create_batch(plan, batch_id=None):
     return batch_id
 
 
-def generate_recipes_batch(client, prompt_info):
-    """Call Claude API to generate a batch of recipes."""
+def _build_prompt(prompt_info):
+    """Build the generation prompt from prompt_info dict."""
     goal_guide = GOAL_GUIDANCE.get(prompt_info["goal"], "Balanced macros")
     cat = prompt_info["category"]
     if cat == "vegan":
@@ -207,7 +212,7 @@ def generate_recipes_batch(client, prompt_info):
         cat_instruction = "use ONLY vegetarian ingredients, no meat/fish"
     else:
         cat_instruction = f"feature {cat} as the main protein"
-    prompt = PROMPT_TEMPLATE.format(
+    return PROMPT_TEMPLATE.format(
         count=prompt_info["count"],
         cuisine=prompt_info["cuisine"],
         category=prompt_info["category"],
@@ -218,24 +223,66 @@ def generate_recipes_batch(client, prompt_info):
         category_instruction=cat_instruction
     )
 
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=16000,
-        messages=[{"role": "user", "content": prompt}]
-    )
 
-    text = response.content[0].text
-    # Extract JSON from response
+def _extract_json(text):
+    """Extract JSON array from LLM response text."""
     text = text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1] if "\n" in text else text[3:]
         text = text.rsplit("```", 1)[0]
     text = text.strip()
-
+    # Try to find JSON array if there's surrounding text
+    if not text.startswith("["):
+        start = text.find("[")
+        if start != -1:
+            text = text[start:]
+    if not text.endswith("]"):
+        end = text.rfind("]")
+        if end != -1:
+            text = text[:end + 1]
     recipes = json.loads(text)
     if not isinstance(recipes, list):
         recipes = [recipes]
     return recipes
+
+
+def generate_recipes_batch(client, prompt_info, model=None):
+    """Call Claude API to generate a batch of recipes."""
+    prompt = _build_prompt(prompt_info)
+
+    response = client.messages.create(
+        model=model or "claude-haiku-4-5-20251001",
+        max_tokens=16000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    text = response.content[0].text
+    return _extract_json(text)
+
+
+def generate_recipes_batch_ollama(base_url, model, prompt_info):
+    """Call Ollama API to generate a batch of recipes."""
+    if not _requests:
+        raise ImportError("pip install requests  (needed for Ollama)")
+
+    prompt = _build_prompt(prompt_info)
+
+    resp = _requests.post(
+        f"{base_url}/api/generate",
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "num_predict": 16000,
+                "temperature": 0.7,
+            }
+        },
+        timeout=300
+    )
+    resp.raise_for_status()
+    text = resp.json().get("response", "")
+    return _extract_json(text)
 
 
 def _merge_tags(llm_tags, deterministic_tags):
@@ -300,31 +347,75 @@ def process_and_store(recipes_raw, prompt_info, batch_id):
     return stored_ids
 
 
-def run_generation(batch_id=None, batch_size=RECIPES_PER_API_CALL, max_items=None):
-    """Main generation loop. Resumable via batch_id."""
-    if not anthropic:
-        print("ERROR: pip install anthropic")
-        return
+def run_generation(batch_id=None, batch_size=RECIPES_PER_API_CALL, max_items=None, provider=None, model=None):
+    """Main generation loop. Resumable via batch_id.
 
+    Args:
+        provider: 'anthropic' (default) or 'ollama'
+        model: model name override (e.g. 'claude-sonnet-4-6', 'llama3.1')
+    """
     init_db()
 
-    # Try DB-stored key first (from admin panel), then env var
-    api_key = None
     from backend.api.admin import get_active_api_key
-    key_data = get_active_api_key('anthropic')
-    if key_data:
-        api_key = key_data['api_key']
-        print("Using API key from database")
-    if not api_key:
-        api_key = ANTHROPIC_API_KEY
-        if api_key:
-            print("Using API key from environment")
 
-    if not api_key:
-        print("ERROR: No API key found. Set ANTHROPIC_API_KEY env var or add one via admin panel.")
-        return
+    # Determine provider
+    if not provider:
+        # Check if ollama key/config exists in DB, else default to anthropic
+        ollama_data = get_active_api_key('ollama')
+        if ollama_data:
+            provider = 'ollama'
+        else:
+            provider = 'anthropic'
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = None
+    ollama_url = None
+    ollama_model = None
+    claude_model = None
+
+    if provider == 'ollama':
+        if not _requests:
+            print("ERROR: pip install requests  (needed for Ollama)")
+            return
+        # Get Ollama config from DB or env
+        key_data = get_active_api_key('ollama')
+        ollama_url = (key_data or {}).get('api_key', '') or OLLAMA_BASE_URL
+        ollama_model = model or (key_data or {}).get('model', '') or OLLAMA_MODEL
+        # Verify Ollama is reachable
+        try:
+            check = _requests.get(f"{ollama_url}/api/tags", timeout=5)
+            check.raise_for_status()
+            models = [m['name'] for m in check.json().get('models', [])]
+            if not any(ollama_model in m for m in models):
+                print(f"WARNING: Model '{ollama_model}' not found. Available: {', '.join(models)}")
+                print("Will attempt anyway (Ollama may pull it automatically)...")
+            print(f"Using Ollama at {ollama_url} with model {ollama_model}")
+        except Exception as e:
+            print(f"ERROR: Cannot reach Ollama at {ollama_url}: {e}")
+            print("Make sure Ollama is running: ollama serve")
+            return
+    else:
+        if not anthropic:
+            print("ERROR: pip install anthropic")
+            return
+        # Try DB-stored key first (from admin panel), then env var
+        api_key = None
+        key_data = get_active_api_key('anthropic')
+        if key_data:
+            api_key = key_data['api_key']
+            print("Using API key from database")
+        if not api_key:
+            api_key = ANTHROPIC_API_KEY
+            if api_key:
+                print("Using API key from environment")
+
+        if not api_key:
+            print("ERROR: No API key found. Set ANTHROPIC_API_KEY env var or add one via admin panel.")
+            return
+
+        client = anthropic.Anthropic(api_key=api_key)
+        # Resolve Claude model: explicit param > DB-stored model > default
+        claude_model = model or (key_data or {}).get('model', '') or "claude-haiku-4-5-20251001"
+        print(f"Using Claude model: {claude_model}")
 
     # Build or resume plan
     plan = build_generation_plan(batch_size)
@@ -361,7 +452,10 @@ def run_generation(batch_id=None, batch_size=RECIPES_PER_API_CALL, max_items=Non
 
         for attempt in range(MAX_RETRIES):
             try:
-                recipes_raw = generate_recipes_batch(client, prompt_info)
+                if provider == 'ollama':
+                    recipes_raw = generate_recipes_batch_ollama(ollama_url, ollama_model, prompt_info)
+                else:
+                    recipes_raw = generate_recipes_batch(client, prompt_info, model=claude_model)
                 stored_ids = process_and_store(recipes_raw, prompt_info, batch_id)
 
                 # Update queue
@@ -466,12 +560,16 @@ def get_generation_status(batch_id=None):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Generate recipes with Claude API")
+    parser = argparse.ArgumentParser(description="Generate recipes with LLM (Claude or Ollama)")
     parser.add_argument("--batch-size", type=int, default=RECIPES_PER_API_CALL,
                        help="Recipes per API call")
     parser.add_argument("--resume", type=str, help="Resume a batch by ID")
     parser.add_argument("--max-items", type=int, help="Limit number of prompt combinations (for testing)")
     parser.add_argument("--status", type=str, help="Check status of a batch")
+    parser.add_argument("--provider", type=str, choices=["anthropic", "ollama"],
+                       help="LLM provider: anthropic (default) or ollama")
+    parser.add_argument("--model", type=str,
+                       help="Model name (e.g. claude-sonnet-4-6, llama3.1, mistral)")
     args = parser.parse_args()
 
     if args.status:
@@ -481,5 +579,7 @@ if __name__ == "__main__":
         run_generation(
             batch_id=args.resume,
             batch_size=args.batch_size,
-            max_items=args.max_items
+            max_items=args.max_items,
+            provider=args.provider,
+            model=args.model
         )

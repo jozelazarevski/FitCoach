@@ -293,6 +293,8 @@ def start_generation():
     data = request.get_json() or {}
     batch_size = data.get('batch_size', 10)
     max_items = data.get('max_items', None)
+    provider = data.get('provider', None)  # 'anthropic' or 'ollama'
+    model = data.get('model', None)  # e.g. 'claude-sonnet-4-6', 'llama3.1'
 
     plan = build_generation_plan(batch_size)
     if max_items:
@@ -301,7 +303,7 @@ def start_generation():
 
     thread = threading.Thread(
         target=run_generation,
-        args=(batch_id, batch_size, max_items),
+        args=(batch_id, batch_size, max_items, provider, model),
         daemon=True
     )
     thread.start()
@@ -310,6 +312,8 @@ def start_generation():
         'batch_id': batch_id,
         'total_prompts': len(plan),
         'expected_recipes': sum(p['count'] for p in plan),
+        'provider': provider or 'auto',
+        'model': model or 'default',
         'message': 'Generation started in background'
     })
 
