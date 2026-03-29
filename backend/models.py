@@ -140,46 +140,83 @@ def suggest_recipes(context, limit=5):
         tags_by_recipe.setdefault(t['recipe_id'], {}).setdefault(t['dimension'], []).append(t['tag'])
 
     # Score each recipe
+    import random
     scored = []
     meal_types = context.get('meal_types', [])
     goal = context.get('goal', '')
-    liked = [f.lower() for f in context.get('liked', [])]
-    disliked = [f.lower() for f in context.get('disliked', [])]
+    liked = [f.lower().strip() for f in context.get('liked', [])]
+    disliked = [f.lower().strip() for f in context.get('disliked', [])]
 
     for row in rows:
         recipe = recipe_to_dict(row)
         rtags = tags_by_recipe.get(recipe['id'], {})
         score = 0.0
 
-        # Meal type match
+        # Meal type match (+30)
         if meal_types:
             if recipe.get('meal_type') in meal_types:
                 score += 30
+            elif recipe.get('meal_type') == 'any':
+                score += 10  # 'any' type gets partial credit
 
-        # Goal alignment
+        # Goal alignment (+25)
         if goal and goal in rtags.get('goal', []):
             score += 25
+        elif goal:
+            # Partial credit for related goals
+            goal_map = {
+                'fat_loss': ['cutting', 'maintenance'],
+                'muscle_gain': ['bulking', 'lean_bulk', 'muscle_building'],
+                'lean_bulk': ['bulking', 'muscle_building', 'maintenance'],
+                'maintain': ['maintenance', 'recomp'],
+                'recomp': ['maintenance', 'cutting', 'fat_loss'],
+            }
+            related = goal_map.get(goal, [])
+            if any(g in rtags.get('goal', []) for g in related):
+                score += 12
 
-        # Macro fit
+        # Macro fit (+20) - how well recipe fits remaining daily targets
         if remaining:
             rem_cal = remaining.get('calories', 500)
             rem_prot = remaining.get('protein', 30)
+            rem_carbs = remaining.get('carbs', 50)
+            rem_fat = remaining.get('fat', 20)
+            # Target ~40% of remaining per meal
             if rem_cal > 0:
-                cal_fit = max(0, 1 - abs(recipe['calories'] - rem_cal * 0.4) / rem_cal)
-                score += cal_fit * 15
+                target_cal = rem_cal * 0.4
+                cal_fit = max(0, 1 - abs(recipe['calories'] - target_cal) / max(rem_cal, 1))
+                score += cal_fit * 8
             if rem_prot > 0:
-                prot_fit = max(0, 1 - abs(recipe['protein'] - rem_prot * 0.4) / rem_prot)
-                score += prot_fit * 15
+                target_prot = rem_prot * 0.4
+                prot_fit = max(0, 1 - abs(recipe['protein'] - target_prot) / max(rem_prot, 1))
+                score += prot_fit * 8
+            # Bonus for not exceeding remaining
+            if recipe['calories'] <= rem_cal and recipe['protein'] <= rem_prot:
+                score += 4
 
-        # Preference match
+        # Preference match - use word tokenization instead of substring
         name_lower = recipe['name'].lower()
-        if any(l in name_lower for l in liked):
-            score += 10
-        if any(d in name_lower for d in disliked):
-            score -= 50
+        name_words = set(name_lower.split())
+        ing_names = ' '.join(i.lower() if isinstance(i, str) else i.get('item', '').lower()
+                            for i in recipe.get('ingredients', []))
 
-        # Variety bonus (randomize a bit)
-        import random
+        for liked_food in liked:
+            liked_words = liked_food.split()
+            if any(w in name_words for w in liked_words) or liked_food in ing_names:
+                score += 10
+                break
+
+        for disliked_food in disliked:
+            disliked_words = disliked_food.split()
+            if any(w in name_words for w in disliked_words) or disliked_food in ing_names:
+                score -= 100  # strong penalty, effectively excludes
+                break
+
+        # Cooking time bonus for quick meals
+        if recipe.get('total_time_min', 60) <= 30:
+            score += 3
+
+        # Variety bonus (small random factor)
         score += random.uniform(0, 5)
 
         recipe['tags'] = rtags
@@ -205,16 +242,36 @@ def suggest_recipes(context, limit=5):
 
 def _generate_why(recipe, context, rank):
     reasons = []
-    if rank == 0:
-        reasons.append("Best macro fit for your remaining targets")
     remaining = context.get('remaining', {})
-    if recipe['protein'] >= 30:
+    goal = context.get('goal', '')
+
+    if rank == 0:
+        rem_cal = remaining.get('calories', 0)
+        rem_prot = remaining.get('protein', 0)
+        if rem_cal and rem_prot:
+            reasons.append(f"Best fit for your remaining {rem_cal}cal / {rem_prot}g protein")
+        else:
+            reasons.append("Best overall match for your goals")
+
+    if recipe['protein'] >= 35:
+        reasons.append(f"packed with {recipe['protein']}g protein")
+    elif recipe['protein'] >= 25:
         reasons.append(f"{recipe['protein']}g protein")
+
     if remaining.get('calories') and recipe['calories'] <= remaining['calories'] * 0.5:
         reasons.append("fits your calorie budget")
-    if recipe.get('total_time_min', 0) <= 30:
+    elif remaining.get('calories') and recipe['calories'] <= remaining['calories']:
+        reasons.append("within remaining calories")
+
+    if recipe.get('total_time_min', 0) <= 20:
+        reasons.append(f"ready in {recipe['total_time_min']} min")
+    elif recipe.get('total_time_min', 0) <= 30:
         reasons.append("quick to prepare")
-    return '. '.join(reasons) if reasons else "Good match for your goals"
+
+    if recipe.get('cuisine') and recipe['cuisine'] != 'International':
+        reasons.append(f"{recipe['cuisine']} cuisine")
+
+    return '. '.join(reasons[:3]) if reasons else "Good match for your goals"
 
 
 def insert_recipe(recipe_data):

@@ -77,16 +77,18 @@ Return ONLY a valid JSON array. Each recipe object must have these exact fields:
 }}
 
 Rules:
-- Use realistic macro numbers (protein + carbs + fat calories should roughly equal total calories)
+- CRITICAL: Macro math must be consistent. protein*4 + carbs*4 + fat*9 must be within 10% of stated calories
 - {goal_guidance}
-- Every ingredient must have exact gram measurements
+- Every ingredient must have exact gram measurements in the "grams" field (integer)
 - Include 6-15 ingredients per recipe
 - Allergens from: gluten, dairy, egg, soy, tree_nuts, peanuts, fish, shellfish, sesame
 - Diet tags from: vegan, vegetarian, high_protein, low_carb, keto, paleo, gluten_free, dairy_free
 - Equipment examples: pan, oven, grill, wok, blender, sheet pan, dutch oven, pot
-- Make recipes practical and delicious
+- Make recipes practical and delicious with real cooking techniques
 - VARY the recipes - different proteins, vegetables, cooking methods, flavor profiles
-- Names should be appetizing and specific (not generic)"""
+- Names should be appetizing and specific (not generic like "Chicken Dish #3")
+- For {category}: {"use ONLY plant-based ingredients, no animal products" if category == "vegan" else "use ONLY vegetarian ingredients, no meat/fish" if category == "vegetarian" else "feature " + category + " as the main protein"}
+- Return ONLY the JSON array, no markdown fences or explanation"""
 
 GOAL_GUIDANCE = {
     "fat_loss": "Calories 300-500, protein 25-45g, moderate carbs, low fat. Focus on lean proteins and vegetables",
@@ -101,14 +103,34 @@ GOAL_GUIDANCE = {
 def build_generation_plan(batch_size=RECIPES_PER_API_CALL):
     """Build the full matrix of prompt combinations for 5000+ recipes."""
     plan = []
+
+    # Define which categories are valid for each diet type
+    ANIMAL_CATEGORIES = {"poultry", "red_meat", "fish", "seafood"}
+    PLANT_CATEGORIES = {"vegan", "vegetarian"}
+
     for cuisine in CUISINES:
         for meal_type in MEAL_TYPES:
             for category in CATEGORIES:
                 for goal in GOALS:
                     # Skip impossible combos
-                    if category in ("vegan", "vegetarian") and goal == "cutting" and meal_type == "snack":
-                        continue
+                    # Vegan/vegetarian can't be animal protein categories
+                    if category in PLANT_CATEGORIES and False:
+                        pass  # category IS the diet, no conflict
+                    # Fish/seafood for breakfast only in Japanese cuisine
                     if category in ("fish", "seafood") and meal_type == "breakfast" and cuisine not in ("Japanese",):
+                        continue
+                    # Red meat breakfast only in American/Brazilian/Turkish
+                    if category == "red_meat" and meal_type == "breakfast" and cuisine not in ("American", "Brazilian", "Turkish"):
+                        continue
+                    # Snack + endurance doesn't make sense
+                    if meal_type == "snack" and goal == "endurance":
+                        continue
+                    # Vegan + bulking/aggressive bulk is uncommon but valid; skip cutting snacks
+                    if category == "vegan" and goal == "cutting" and meal_type == "snack":
+                        continue
+                    # Skip some low-value combos to reduce from ~4000 to ~3000 prompts
+                    # Not every cuisine has seafood dishes
+                    if category == "seafood" and cuisine in ("Ethiopian", "Peruvian", "Turkish"):
                         continue
 
                     difficulty = DIFFICULTIES[len(plan) % 3]

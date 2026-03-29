@@ -357,7 +357,11 @@ def compute_tags(recipe):
     if "gluten" not in allergens and "dairy" not in allergens and sugar <= 3 and \
        not any(x in ing_str for x in ["soy", "corn", "peanut"]):
         dietary.append("whole30_compliant")
-    if category in ["fish", "seafood"] or "vegan" in dietary or "vegetarian" in dietary:
+    # Pescatarian = eats fish but no other meat. Fish/seafood recipes qualify,
+    # as do vegetarian recipes (they're meat-free). Vegan is stricter, skip.
+    if category in ["fish", "seafood"]:
+        dietary.append("pescatarian")
+    elif "vegetarian" in dietary and "vegan" not in dietary:
         dietary.append("pescatarian")
     if any(x in ing_str for x in ["olive oil", "fish", "tomato", "garlic", "lemon"]) and fat_pct <= 45:
         dietary.append("mediterranean_diet")
