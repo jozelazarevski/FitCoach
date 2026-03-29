@@ -162,9 +162,9 @@ const LLM = {
       });
 
       if (!res.ok) return null;
-      const data = await res.json();
-      if (data.suggestions && data.suggestions.length > 0) {
-        return data;
+      const result = await res.json();
+      if (result.suggestions && result.suggestions.length > 0) {
+        return result;
       }
     } catch {
       // Backend not available, fall through to LLM
