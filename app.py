@@ -87,11 +87,10 @@ def serve_admin(filename):
 # Health check
 @app.route('/api/health')
 def health():
-    from backend.db import get_db
+    from backend.db import use_db
     try:
-        db = get_db()
-        count = db.execute("SELECT COUNT(*) FROM recipes WHERE status = 'active'").fetchone()[0]
-        db.close()
+        with use_db() as db:
+            count = db.execute("SELECT COUNT(*) FROM recipes WHERE status = 'active'").fetchone()[0]
         return jsonify({'status': 'ok', 'recipes_count': count})
     except Exception as e:
         return jsonify({'status': 'error', 'error': str(e)}), 500

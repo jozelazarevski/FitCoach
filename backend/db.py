@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from contextlib import contextmanager
 from config import DB_PATH
 
 SCHEMA = """
@@ -53,6 +54,9 @@ CREATE INDEX IF NOT EXISTS idx_recipes_category ON recipes(category);
 CREATE INDEX IF NOT EXISTS idx_recipes_status ON recipes(status);
 CREATE INDEX IF NOT EXISTS idx_recipes_calories ON recipes(calories);
 CREATE INDEX IF NOT EXISTS idx_recipes_protein ON recipes(protein);
+CREATE INDEX IF NOT EXISTS idx_recipes_status_meal ON recipes(status, meal_type);
+CREATE INDEX IF NOT EXISTS idx_recipes_status_cal ON recipes(status, calories);
+CREATE INDEX IF NOT EXISTS idx_queue_batch_status ON generation_queue(batch_id, status);
 
 CREATE TABLE IF NOT EXISTS generation_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,15 +103,45 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    """Open a raw connection. Caller must close it. Prefer use_db() instead."""
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
-def init_db():
+@contextmanager
+def use_db():
+    """Context manager that guarantees connection cleanup.
+
+    Usage:
+        with use_db() as db:
+            db.execute(...)
+            db.commit()
+    """
     conn = get_db()
-    conn.executescript(SCHEMA)
-    conn.commit()
-    conn.close()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def init_db():
+    with use_db() as conn:
+        conn.executescript(SCHEMA)
+        conn.commit()
+    # Run one-time maintenance
+    _run_maintenance()
+
+
+def _run_maintenance():
+    """Run periodic maintenance: purge old sessions, optimize, checkpoint WAL."""
+    with use_db() as conn:
+        # Purge admin sessions older than 7 days
+        conn.execute("DELETE FROM admin_sessions WHERE created_at < datetime('now', '-7 days')")
+        conn.commit()
+        # Optimize query planner statistics
+        conn.execute("PRAGMA optimize")
+        # Checkpoint WAL to keep file size reasonable
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")

@@ -89,7 +89,6 @@ def _extract_ingredient_words(recipe_dict):
     words = set()
     for ing in recipe_dict.get('ingredients', []):
         text = ing.lower() if isinstance(ing, str) else ing.get('item', '').lower()
-        # Strip quantities/units, keep meaningful food words (3+ chars)
         for w in text.split():
             if len(w) >= 3 and not w.replace('.', '').replace(',', '').isdigit():
                 words.add(w)
@@ -112,18 +111,19 @@ def meal_plan():
     used_ids = set()
     plan = []
 
-    # Track all ingredient words across the plan for overlap scoring
+    # Track ingredient words across the plan for overlap scoring
     plan_ingredients = set()
 
-    # Pre-fetch all candidate recipes so we can score ingredient overlap
-    from backend.db import get_db
-    db = get_db()
-    all_active = db.execute("SELECT * FROM recipes WHERE status = 'active'").fetchall()
-    db.close()
+    # Pre-fetch only id + ingredients (not full rows) for overlap scoring
+    from backend.db import use_db
     recipe_ingredients_cache = {}
-    for row in all_active:
-        rd = recipe_to_dict(dict(row))
-        recipe_ingredients_cache[rd['id']] = _extract_ingredient_words(rd)
+    with use_db() as db:
+        rows = db.execute(
+            "SELECT id, ingredients FROM recipes WHERE status = 'active'"
+        ).fetchall()
+    for row in rows:
+        rd = {'ingredients': json.loads(row['ingredients']) if row['ingredients'] else []}
+        recipe_ingredients_cache[row['id']] = _extract_ingredient_words(rd)
 
     for day in days:
         meals = []
@@ -142,16 +142,14 @@ def meal_plan():
             }
             results = suggest_recipes(context, limit=10)
 
-            # Re-rank candidates by ingredient overlap with existing plan
+            # Re-rank by ingredient overlap with existing plan
             if plan_ingredients and results:
                 for r in results:
                     r_ings = recipe_ingredients_cache.get(r['id'], set())
                     overlap = len(r_ings & plan_ingredients)
-                    # Boost score: each shared ingredient word adds a small bonus
                     r['_overlap_score'] = min(overlap * 2, 15)
                 results.sort(key=lambda r: -(r.get('_overlap_score', 0) + (10 - r['rank'])))
 
-            # Pick one not already used
             pick = None
             for r in results:
                 if r['id'] not in used_ids:
@@ -163,7 +161,6 @@ def meal_plan():
                 continue
 
             used_ids.add(pick['id'])
-            # Add this recipe's ingredients to the shared pool
             plan_ingredients.update(recipe_ingredients_cache.get(pick['id'], set()))
 
             meals.append({

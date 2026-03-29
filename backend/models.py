@@ -1,7 +1,7 @@
 import json
 import random
 from datetime import date
-from backend.db import get_db
+from backend.db import get_db, use_db
 
 
 def recipe_to_dict(row):
@@ -16,78 +16,76 @@ def recipe_to_dict(row):
 
 
 def get_recipe(recipe_id):
-    db = get_db()
-    row = db.execute("SELECT * FROM recipes WHERE id = ? AND status = 'active'", (recipe_id,)).fetchone()
-    if not row:
-        return None
-    recipe = recipe_to_dict(row)
-    tags = db.execute("SELECT dimension, tag FROM recipe_tags WHERE recipe_id = ?", (recipe_id,)).fetchall()
-    recipe['tags'] = {}
-    for t in tags:
-        recipe['tags'].setdefault(t['dimension'], []).append(t['tag'])
-    db.close()
-    return recipe
+    with use_db() as db:
+        row = db.execute("SELECT * FROM recipes WHERE id = ? AND status = 'active'", (recipe_id,)).fetchone()
+        if not row:
+            return None
+        recipe = recipe_to_dict(row)
+        tags = db.execute("SELECT dimension, tag FROM recipe_tags WHERE recipe_id = ?", (recipe_id,)).fetchall()
+        recipe['tags'] = {}
+        for t in tags:
+            recipe['tags'].setdefault(t['dimension'], []).append(t['tag'])
+        return recipe
 
 
 def search_recipes(filters=None, page=1, per_page=20):
-    db = get_db()
-    conditions = ["r.status = 'active'"]
-    params = []
+    with use_db() as db:
+        conditions = ["r.status = 'active'"]
+        params = []
 
-    if filters:
-        if filters.get('meal_type'):
-            conditions.append("r.meal_type = ?")
-            params.append(filters['meal_type'])
-        if filters.get('cuisine'):
-            conditions.append("r.cuisine = ?")
-            params.append(filters['cuisine'])
-        if filters.get('category'):
-            conditions.append("r.category = ?")
-            params.append(filters['category'])
-        if filters.get('max_calories'):
-            conditions.append("r.calories <= ?")
-            params.append(int(filters['max_calories']))
-        if filters.get('min_protein'):
-            conditions.append("r.protein >= ?")
-            params.append(int(filters['min_protein']))
-        if filters.get('max_carbs'):
-            conditions.append("r.carbs <= ?")
-            params.append(int(filters['max_carbs']))
-        if filters.get('max_fat'):
-            conditions.append("r.fat <= ?")
-            params.append(int(filters['max_fat']))
-        if filters.get('max_time'):
-            conditions.append("r.total_time_min <= ?")
-            params.append(int(filters['max_time']))
-        if filters.get('search'):
-            conditions.append("r.name LIKE ?")
-            params.append(f"%{filters['search']}%")
-        if filters.get('diet'):
-            diets = filters['diet'].split(',') if isinstance(filters['diet'], str) else filters['diet']
-            for diet in diets:
+        if filters:
+            if filters.get('meal_type'):
+                conditions.append("r.meal_type = ?")
+                params.append(filters['meal_type'])
+            if filters.get('cuisine'):
+                conditions.append("r.cuisine = ?")
+                params.append(filters['cuisine'])
+            if filters.get('category'):
+                conditions.append("r.category = ?")
+                params.append(filters['category'])
+            if filters.get('max_calories'):
+                conditions.append("r.calories <= ?")
+                params.append(int(filters['max_calories']))
+            if filters.get('min_protein'):
+                conditions.append("r.protein >= ?")
+                params.append(int(filters['min_protein']))
+            if filters.get('max_carbs'):
+                conditions.append("r.carbs <= ?")
+                params.append(int(filters['max_carbs']))
+            if filters.get('max_fat'):
+                conditions.append("r.fat <= ?")
+                params.append(int(filters['max_fat']))
+            if filters.get('max_time'):
+                conditions.append("r.total_time_min <= ?")
+                params.append(int(filters['max_time']))
+            if filters.get('search'):
+                conditions.append("r.name LIKE ?")
+                params.append(f"%{filters['search']}%")
+            if filters.get('diet'):
+                diets = filters['diet'].split(',') if isinstance(filters['diet'], str) else filters['diet']
+                for diet in diets:
+                    conditions.append("""r.id IN (
+                        SELECT recipe_id FROM recipe_tags WHERE dimension = 'dietary' AND tag = ?
+                    )""")
+                    params.append(diet.strip())
+            if filters.get('goal'):
                 conditions.append("""r.id IN (
-                    SELECT recipe_id FROM recipe_tags WHERE dimension = 'dietary' AND tag = ?
+                    SELECT recipe_id FROM recipe_tags WHERE dimension = 'goal' AND tag = ?
                 )""")
-                params.append(diet.strip())
-        if filters.get('goal'):
-            conditions.append("""r.id IN (
-                SELECT recipe_id FROM recipe_tags WHERE dimension = 'goal' AND tag = ?
-            )""")
-            params.append(filters['goal'])
+                params.append(filters['goal'])
 
-    where = " AND ".join(conditions)
-    count = db.execute(f"SELECT COUNT(*) FROM recipes r WHERE {where}", params).fetchone()[0]
+        where = " AND ".join(conditions)
+        count = db.execute(f"SELECT COUNT(*) FROM recipes r WHERE {where}", params).fetchone()[0]
 
-    offset = (page - 1) * per_page
-    rows = db.execute(
-        f"SELECT * FROM recipes r WHERE {where} ORDER BY r.id DESC LIMIT ? OFFSET ?",
-        params + [per_page, offset]
-    ).fetchall()
+        offset = (page - 1) * per_page
+        rows = db.execute(
+            f"SELECT * FROM recipes r WHERE {where} ORDER BY r.id DESC LIMIT ? OFFSET ?",
+            params + [per_page, offset]
+        ).fetchall()
 
-    recipes = [recipe_to_dict(r) for r in rows]
-    db.close()
-    return {'recipes': recipes, 'total': count, 'page': page, 'per_page': per_page,
-            'pages': (count + per_page - 1) // per_page}
+        recipes = [recipe_to_dict(r) for r in rows]
+        return {'recipes': recipes, 'total': count, 'page': page, 'per_page': per_page,
+                'pages': (count + per_page - 1) // per_page}
 
 
 def _time_appropriate_meals(hour):
@@ -209,49 +207,44 @@ def suggest_recipes(context, limit=5):
       Budget:      cost awareness +5
       Jitter:      random +0-5
     """
-    db = get_db()
+    with use_db() as db:
+        conditions = ["r.status = 'active'"]
+        params = []
 
-    conditions = ["r.status = 'active'"]
-    params = []
+        diet_filters = context.get('diet_filters', [])
+        for diet in diet_filters:
+            tag_map = {
+                'vegan': 'vegan', 'vegetarian': 'vegetarian', 'keto': 'keto_friendly',
+                'low_carb': 'low_carb', 'high_protein': 'high_protein',
+                'paleo': 'paleo', 'gluten_free': 'gluten_free', 'dairy_free': 'dairy_free',
+                'mediterranean': 'mediterranean_diet', 'whole30': 'whole30_compliant'
+            }
+            mapped = tag_map.get(diet, diet)
+            conditions.append("""r.id IN (
+                SELECT recipe_id FROM recipe_tags WHERE dimension = 'dietary' AND tag = ?
+            )""")
+            params.append(mapped)
 
-    # Pre-filter by diet compliance
-    diet_filters = context.get('diet_filters', [])
-    for diet in diet_filters:
-        tag_map = {
-            'vegan': 'vegan', 'vegetarian': 'vegetarian', 'keto': 'keto_friendly',
-            'low_carb': 'low_carb', 'high_protein': 'high_protein',
-            'paleo': 'paleo', 'gluten_free': 'gluten_free', 'dairy_free': 'dairy_free',
-            'mediterranean': 'mediterranean_diet', 'whole30': 'whole30_compliant'
-        }
-        mapped = tag_map.get(diet, diet)
-        conditions.append("""r.id IN (
-            SELECT recipe_id FROM recipe_tags WHERE dimension = 'dietary' AND tag = ?
-        )""")
-        params.append(mapped)
+        remaining = context.get('remaining', {})
+        if remaining.get('calories'):
+            max_cal = int(remaining['calories'] * 1.2)
+            conditions.append("r.calories <= ?")
+            params.append(max_cal)
 
-    # Pre-filter by calorie range if remaining is known
-    remaining = context.get('remaining', {})
-    if remaining.get('calories'):
-        max_cal = int(remaining['calories'] * 1.2)
-        conditions.append("r.calories <= ?")
-        params.append(max_cal)
+        where = " AND ".join(conditions)
+        rows = db.execute(
+            f"SELECT * FROM recipes r WHERE {where} LIMIT 200", params
+        ).fetchall()
 
-    where = " AND ".join(conditions)
-    rows = db.execute(
-        f"SELECT * FROM recipes r WHERE {where} LIMIT 200", params
-    ).fetchall()
+        recipe_ids = [r['id'] for r in rows]
+        if not recipe_ids:
+            return []
 
-    recipe_ids = [r['id'] for r in rows]
-    if not recipe_ids:
-        db.close()
-        return []
-
-    placeholders = ','.join('?' * len(recipe_ids))
-    all_tags = db.execute(
-        f"SELECT recipe_id, dimension, tag FROM recipe_tags WHERE recipe_id IN ({placeholders})",
-        recipe_ids
-    ).fetchall()
-    db.close()
+        placeholders = ','.join('?' * len(recipe_ids))
+        all_tags = db.execute(
+            f"SELECT recipe_id, dimension, tag FROM recipe_tags WHERE recipe_id IN ({placeholders})",
+            recipe_ids
+        ).fetchall()
 
     tags_by_recipe = {}
     for t in all_tags:
@@ -869,53 +862,55 @@ def _generate_why(recipe, context, rank):
     return '. '.join(reasons[:5]) if reasons else "Good match for your goals"
 
 
-def insert_recipe(recipe_data):
-    db = get_db()
-    cur = db.execute("""
-        INSERT INTO recipes (name, description, category, cuisine, country_of_origin, region,
-            meal_type, difficulty, prep_time_min, cook_time_min, total_time_min, servings,
-            calories, protein, carbs, fat, fiber, sugar,
-            ingredients, steps, tips, equipment, allergens, diet,
-            meal_prep_friendly, source, generation_batch)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        recipe_data['name'],
-        recipe_data.get('description', ''),
-        recipe_data.get('category', 'general'),
-        recipe_data.get('cuisine', 'International'),
-        recipe_data.get('country_of_origin', 'International'),
-        recipe_data.get('region', 'International'),
-        recipe_data.get('meal_type', 'any'),
-        recipe_data.get('difficulty', 'medium'),
-        recipe_data.get('prep_time_min', 0),
-        recipe_data.get('cook_time_min', 0),
-        recipe_data.get('total_time_min', 0),
-        recipe_data.get('servings', 1),
-        recipe_data['calories'],
-        recipe_data['protein'],
-        recipe_data['carbs'],
-        recipe_data['fat'],
-        recipe_data.get('fiber', 0),
-        recipe_data.get('sugar', 0),
-        json.dumps(recipe_data.get('ingredients', [])),
-        json.dumps(recipe_data.get('steps', [])),
-        recipe_data.get('tips', ''),
-        json.dumps(recipe_data.get('equipment', [])),
-        json.dumps(recipe_data.get('allergens', [])),
-        json.dumps(recipe_data.get('diet', [])),
-        1 if recipe_data.get('meal_prep_friendly') else 0,
-        recipe_data.get('source', 'generated'),
-        recipe_data.get('generation_batch', None)
-    ))
-    recipe_id = cur.lastrowid
-    db.commit()
-    db.close()
-    return recipe_id
+def insert_recipe(recipe_data, tags_dict=None):
+    """Insert recipe and optionally its tags in a single transaction."""
+    with use_db() as db:
+        cur = db.execute("""
+            INSERT INTO recipes (name, description, category, cuisine, country_of_origin, region,
+                meal_type, difficulty, prep_time_min, cook_time_min, total_time_min, servings,
+                calories, protein, carbs, fat, fiber, sugar,
+                ingredients, steps, tips, equipment, allergens, diet,
+                meal_prep_friendly, source, generation_batch)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            recipe_data['name'],
+            recipe_data.get('description', ''),
+            recipe_data.get('category', 'general'),
+            recipe_data.get('cuisine', 'International'),
+            recipe_data.get('country_of_origin', 'International'),
+            recipe_data.get('region', 'International'),
+            recipe_data.get('meal_type', 'any'),
+            recipe_data.get('difficulty', 'medium'),
+            recipe_data.get('prep_time_min', 0),
+            recipe_data.get('cook_time_min', 0),
+            recipe_data.get('total_time_min', 0),
+            recipe_data.get('servings', 1),
+            recipe_data['calories'],
+            recipe_data['protein'],
+            recipe_data['carbs'],
+            recipe_data['fat'],
+            recipe_data.get('fiber', 0),
+            recipe_data.get('sugar', 0),
+            json.dumps(recipe_data.get('ingredients', [])),
+            json.dumps(recipe_data.get('steps', [])),
+            recipe_data.get('tips', ''),
+            json.dumps(recipe_data.get('equipment', [])),
+            json.dumps(recipe_data.get('allergens', [])),
+            json.dumps(recipe_data.get('diet', [])),
+            1 if recipe_data.get('meal_prep_friendly') else 0,
+            recipe_data.get('source', 'generated'),
+            recipe_data.get('generation_batch', None)
+        ))
+        recipe_id = cur.lastrowid
+        if tags_dict:
+            _insert_tags_on_conn(db, recipe_id, tags_dict)
+        db.commit()
+        return recipe_id
 
 
-def insert_tags(recipe_id, tags_dict):
-    db = get_db()
+def _insert_tags_on_conn(db, recipe_id, tags_dict):
+    """Insert tags using an existing connection (no commit)."""
     for dimension, values in tags_dict.items():
         if isinstance(values, list):
             for v in values:
@@ -928,44 +923,60 @@ def insert_tags(recipe_id, tags_dict):
                 "INSERT OR IGNORE INTO recipe_tags (recipe_id, dimension, tag) VALUES (?, ?, ?)",
                 (recipe_id, dimension, str(values))
             )
-    db.commit()
-    db.close()
+
+
+def insert_tags(recipe_id, tags_dict):
+    """Insert tags in their own transaction. Use insert_recipe(tags_dict=) for atomicity."""
+    with use_db() as db:
+        _insert_tags_on_conn(db, recipe_id, tags_dict)
+        db.commit()
+
+
+# Whitelist of columns that can be updated via the API
+_UPDATABLE_COLUMNS = frozenset({
+    'name', 'description', 'category', 'cuisine', 'country_of_origin', 'region',
+    'meal_type', 'difficulty', 'prep_time_min', 'cook_time_min', 'total_time_min',
+    'servings', 'calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar',
+    'ingredients', 'steps', 'tips', 'equipment', 'allergens', 'diet',
+    'meal_prep_friendly', 'source', 'status',
+})
 
 
 def update_recipe(recipe_id, updates):
-    db = get_db()
-    sets = []
-    params = []
-    for key, val in updates.items():
-        if key in ('ingredients', 'steps', 'equipment', 'allergens', 'diet'):
-            val = json.dumps(val) if isinstance(val, list) else val
-        sets.append(f"{key} = ?")
-        params.append(val)
-    sets.append("updated_at = CURRENT_TIMESTAMP")
-    params.append(recipe_id)
-    db.execute(f"UPDATE recipes SET {', '.join(sets)} WHERE id = ?", params)
-    db.commit()
-    db.close()
+    with use_db() as db:
+        sets = []
+        params = []
+        for key, val in updates.items():
+            if key not in _UPDATABLE_COLUMNS:
+                continue  # reject unknown/unsafe column names
+            if key in ('ingredients', 'steps', 'equipment', 'allergens', 'diet'):
+                val = json.dumps(val) if isinstance(val, list) else val
+            sets.append(f"{key} = ?")
+            params.append(val)
+        if not sets:
+            return
+        sets.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(recipe_id)
+        db.execute(f"UPDATE recipes SET {', '.join(sets)} WHERE id = ?", params)
+        db.commit()
 
 
 def delete_recipe(recipe_id):
-    db = get_db()
-    db.execute("UPDATE recipes SET status = 'archived' WHERE id = ?", (recipe_id,))
-    db.commit()
-    db.close()
+    with use_db() as db:
+        db.execute("UPDATE recipes SET status = 'archived' WHERE id = ?", (recipe_id,))
+        db.commit()
 
 
 def get_tag_stats():
-    db = get_db()
-    rows = db.execute("""
-        SELECT dimension, tag, COUNT(*) as cnt
-        FROM recipe_tags rt
-        JOIN recipes r ON rt.recipe_id = r.id
-        WHERE r.status = 'active'
-        GROUP BY dimension, tag
-        ORDER BY dimension, cnt DESC
-    """).fetchall()
-    db.close()
+    with use_db() as db:
+        rows = db.execute("""
+            SELECT dimension, tag, COUNT(*) as cnt
+            FROM recipe_tags rt
+            JOIN recipes r ON rt.recipe_id = r.id
+            WHERE r.status = 'active'
+            GROUP BY dimension, tag
+            ORDER BY dimension, cnt DESC
+        """).fetchall()
     stats = {}
     for r in rows:
         stats.setdefault(r['dimension'], {})[r['tag']] = r['cnt']
@@ -973,21 +984,20 @@ def get_tag_stats():
 
 
 def get_overview_stats():
-    db = get_db()
-    total = db.execute("SELECT COUNT(*) FROM recipes WHERE status = 'active'").fetchone()[0]
-    by_cuisine = db.execute(
-        "SELECT cuisine, COUNT(*) as cnt FROM recipes WHERE status = 'active' GROUP BY cuisine ORDER BY cnt DESC"
-    ).fetchall()
-    by_meal = db.execute(
-        "SELECT meal_type, COUNT(*) as cnt FROM recipes WHERE status = 'active' GROUP BY meal_type ORDER BY cnt DESC"
-    ).fetchall()
-    by_category = db.execute(
-        "SELECT category, COUNT(*) as cnt FROM recipes WHERE status = 'active' GROUP BY category ORDER BY cnt DESC"
-    ).fetchall()
-    avg_macros = db.execute(
-        "SELECT AVG(calories) as cal, AVG(protein) as prot, AVG(carbs) as carb, AVG(fat) as fat FROM recipes WHERE status = 'active'"
-    ).fetchone()
-    db.close()
+    with use_db() as db:
+        total = db.execute("SELECT COUNT(*) FROM recipes WHERE status = 'active'").fetchone()[0]
+        by_cuisine = db.execute(
+            "SELECT cuisine, COUNT(*) as cnt FROM recipes WHERE status = 'active' GROUP BY cuisine ORDER BY cnt DESC"
+        ).fetchall()
+        by_meal = db.execute(
+            "SELECT meal_type, COUNT(*) as cnt FROM recipes WHERE status = 'active' GROUP BY meal_type ORDER BY cnt DESC"
+        ).fetchall()
+        by_category = db.execute(
+            "SELECT category, COUNT(*) as cnt FROM recipes WHERE status = 'active' GROUP BY category ORDER BY cnt DESC"
+        ).fetchall()
+        avg_macros = db.execute(
+            "SELECT AVG(calories) as cal, AVG(protein) as prot, AVG(carbs) as carb, AVG(fat) as fat FROM recipes WHERE status = 'active'"
+        ).fetchone()
     return {
         'total_recipes': total,
         'by_cuisine': {r['cuisine']: r['cnt'] for r in by_cuisine},

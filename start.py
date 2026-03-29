@@ -1,11 +1,10 @@
 """Production startup: initialize DB and seed recipes if empty."""
-from backend.db import init_db, get_db
+from backend.db import init_db, use_db
 
 init_db()
 
-db = get_db()
-count = db.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
-db.close()
+with use_db() as db:
+    count = db.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
 
 if count == 0:
     print("Empty database — seeding starter recipes...")
