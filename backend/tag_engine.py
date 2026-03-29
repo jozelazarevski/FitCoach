@@ -496,3 +496,156 @@ def compute_tags(recipe):
     else: tags["time_bracket"] = "project"
 
     return tags
+
+
+def compute_deterministic_tags(recipe):
+    """Compute only the math/number-based tags that are trivially derived from recipe data.
+
+    These supplement LLM-generated tags with dimensions that are purely formulaic
+    (calorie brackets, timing, macro profile, etc.) and shouldn't rely on LLM judgment.
+    """
+    cal = recipe.get("calories", 0)
+    prot = recipe.get("protein", 0)
+    carbs = recipe.get("carbs", 0)
+    fat = recipe.get("fat", 0)
+    fiber = recipe.get("fiber", 0)
+    sugar = recipe.get("sugar", 0)
+    total_time = recipe.get("total_time_min", 0)
+    prep_time = recipe.get("prep_time_min", 0)
+    cook_time = recipe.get("cook_time_min", 0)
+    servings = recipe.get("servings", 1) or 1
+
+    ingredients = recipe.get("ingredients", [])
+    total_grams = 0
+    for ing in ingredients:
+        if isinstance(ing, dict):
+            total_grams += ing.get("grams", 100)
+        else:
+            total_grams += 100
+    num_ingredients = len(ingredients)
+
+    total_macro_cal = max((prot * 4) + (carbs * 4) + (fat * 9), 1)
+    prot_pct = (prot * 4) / total_macro_cal * 100
+    carb_pct = (carbs * 4) / total_macro_cal * 100
+    fat_pct = (fat * 9) / total_macro_cal * 100
+    category = recipe.get("category", "general")
+
+    tags = {}
+
+    # Timing
+    timing = []
+    if total_time <= 10: timing.append("under_10_min")
+    if total_time <= 15: timing.append("under_15_min")
+    if total_time <= 20: timing.append("under_20_min")
+    if total_time <= 30: timing.append("under_30_min")
+    if total_time <= 45: timing.append("under_45_min")
+    if total_time <= 60: timing.append("under_60_min")
+    if total_time > 60: timing.append("over_60_min")
+    if total_time > 120: timing.append("slow_cook")
+    if prep_time <= 5: timing.append("minimal_prep")
+    if prep_time <= 10: timing.append("quick_prep")
+    if cook_time == 0: timing.append("no_cook")
+    if cook_time <= 10: timing.append("flash_cook")
+    if cook_time <= 15: timing.append("quick_cook")
+    if cook_time >= 60: timing.append("long_cook")
+    tags["timing"] = timing
+
+    # Macro profile
+    macro_profile = []
+    if 25 <= prot_pct <= 35 and 35 <= carb_pct <= 50 and 20 <= fat_pct <= 35: macro_profile.append("balanced_macros")
+    if carb_pct >= 55 and fat_pct <= 25: macro_profile.append("high_carb_low_fat")
+    if fat_pct >= 50 and carb_pct <= 20: macro_profile.append("high_fat_low_carb")
+    if 20 <= prot < 30: macro_profile.append("moderate_protein")
+    if prot >= 30: macro_profile.append("high_protein")
+    if prot >= 40: macro_profile.append("very_high_protein")
+    if prot >= 50: macro_profile.append("ultra_high_protein")
+    if fat <= 5: macro_profile.append("very_low_fat")
+    if fat <= 10: macro_profile.append("low_fat")
+    if carbs <= 10: macro_profile.append("very_low_carb")
+    if carbs <= 20: macro_profile.append("low_carb")
+    if sugar <= 3: macro_profile.append("very_low_sugar")
+    if sugar <= 5: macro_profile.append("low_sugar")
+    if sugar >= 15: macro_profile.append("high_sugar")
+    if fiber >= 5: macro_profile.append("good_fiber")
+    if fiber >= 8: macro_profile.append("high_fiber")
+    if fiber >= 12: macro_profile.append("very_high_fiber")
+    if cal <= 200: macro_profile.append("very_low_calorie")
+    if cal <= 300: macro_profile.append("low_calorie")
+    if cal <= 400: macro_profile.append("moderate_calorie")
+    if cal >= 500: macro_profile.append("high_calorie")
+    if cal >= 700: macro_profile.append("very_high_calorie")
+    if prot_pct >= 40: macro_profile.append("protein_dominant")
+    if carb_pct >= 55: macro_profile.append("carb_dominant")
+    if fat_pct >= 50: macro_profile.append("fat_dominant")
+    if carbs <= 15 and fat_pct >= 60: macro_profile.append("keto_friendly")
+    tags["macro_profile"] = macro_profile
+
+    # Calorie bracket
+    if cal < 200: tags["calorie_bracket"] = "under_200"
+    elif cal < 300: tags["calorie_bracket"] = "200_to_300"
+    elif cal < 400: tags["calorie_bracket"] = "300_to_400"
+    elif cal < 500: tags["calorie_bracket"] = "400_to_500"
+    elif cal < 600: tags["calorie_bracket"] = "500_to_600"
+    elif cal < 700: tags["calorie_bracket"] = "600_to_700"
+    else: tags["calorie_bracket"] = "700_plus"
+
+    # Protein bracket
+    if prot < 10: tags["protein_bracket"] = "under_10g"
+    elif prot < 20: tags["protein_bracket"] = "10_to_20g"
+    elif prot < 30: tags["protein_bracket"] = "20_to_30g"
+    elif prot < 40: tags["protein_bracket"] = "30_to_40g"
+    elif prot < 50: tags["protein_bracket"] = "40_to_50g"
+    else: tags["protein_bracket"] = "50g_plus"
+
+    # Time bracket
+    if total_time <= 15: tags["time_bracket"] = "express"
+    elif total_time <= 30: tags["time_bracket"] = "quick"
+    elif total_time <= 45: tags["time_bracket"] = "standard"
+    elif total_time <= 60: tags["time_bracket"] = "involved"
+    elif total_time <= 120: tags["time_bracket"] = "lengthy"
+    else: tags["time_bracket"] = "project"
+
+    # Ingredient count/complexity
+    tags["ingredient_count"] = str(num_ingredients)
+    if num_ingredients <= 5: tags["ingredient_complexity"] = "minimal"
+    elif num_ingredients <= 8: tags["ingredient_complexity"] = "simple"
+    elif num_ingredients <= 12: tags["ingredient_complexity"] = "moderate"
+    else: tags["ingredient_complexity"] = "complex"
+
+    # Energy density
+    total_weight = total_grams / max(servings, 1)
+    if total_weight > 0:
+        energy_density = cal / (total_weight / 100)
+        if energy_density < 100: tags["energy_density"] = "very_low"
+        elif energy_density < 200: tags["energy_density"] = "low"
+        elif energy_density < 300: tags["energy_density"] = "moderate"
+        else: tags["energy_density"] = "high"
+
+    # Cost estimate
+    protein_cost_factor = 1.0
+    if category in ("fish", "seafood"): protein_cost_factor = 2.0
+    elif category == "red_meat": protein_cost_factor = 1.5
+    ing_str = " ".join(
+        (ing.get("item", "") if isinstance(ing, dict) else ing).lower()
+        for ing in ingredients
+    )
+    if any(x in ing_str for x in ["lobster", "scallop", "tenderloin", "ribeye", "duck", "bison", "venison", "swordfish", "halibut", "burrata", "truffle"]):
+        protein_cost_factor = 2.5
+    est_cost = (total_grams / max(servings, 1) * 0.008) * protein_cost_factor
+    if est_cost < 3: tags["cost"] = "budget_friendly"
+    elif est_cost < 6: tags["cost"] = "moderate_cost"
+    elif est_cost < 10: tags["cost"] = "premium"
+    else: tags["cost"] = "luxury"
+    tags["est_cost_per_serving"] = str(round(est_cost, 2))
+
+    # Portion size
+    portion = []
+    if servings == 1: portion.append("single_serving")
+    if servings == 2: portion.append("couple_sized")
+    if servings >= 4: portion.append("family_sized")
+    if servings >= 6: portion.append("party_batch")
+    if servings <= 2: portion.append("small_batch")
+    portion.append("scalable")
+    tags["portion"] = portion
+
+    return tags
