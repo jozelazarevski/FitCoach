@@ -48,6 +48,46 @@ const LLM = {
       const todayMeals = Store.getTodayMeals();
       const mealsEatenToday = todayMeals.length;
 
+      // Gather recent cuisines for diversity scoring
+      const recentCuisines = [];
+      const recentProteinSources = [];
+      for (let i = 0; i <= 3; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const key = d.toISOString().split('T')[0];
+        const dayMeals = Store.getDayMeals(key);
+        dayMeals.forEach(m => {
+          if (m.cuisine) recentCuisines.push(m.cuisine.toLowerCase());
+          if (m.protein_source) recentProteinSources.push(m.protein_source.toLowerCase());
+        });
+      }
+
+      // Workout data for post-workout awareness
+      const todayWorkoutCals = Store.getTodayWorkoutCalories();
+      const todayWorkouts = Store.getTodayWorkouts();
+      const hasRecentWorkout = todayWorkouts.some(w => {
+        const wTime = new Date(w.time);
+        return (Date.now() - wTime.getTime()) < 3 * 60 * 60 * 1000; // within 3 hours
+      });
+
+      // Body trend for plateau detection
+      const bodyLog = Store.getBodyLog();
+      let weightTrend = 'stable';
+      if (bodyLog.length >= 3) {
+        const recent = bodyLog.slice(-3);
+        const diff = recent[recent.length - 1].weight - recent[0].weight;
+        if (Math.abs(diff) < 0.3) weightTrend = 'plateau';
+        else if (diff > 0) weightTrend = 'gaining';
+        else weightTrend = 'losing';
+      }
+
+      // Fiber and sugar tracking
+      const remainingFull = {
+        ...remaining,
+        fiber: Math.max(0, 25 - (todayTotals.fiber || 0)),
+        sugar_processed: todayTotals.sugar_processed || 0
+      };
+
       const res = await fetch(`${this.backendUrl}/api/recipes/suggest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -55,12 +95,23 @@ const LLM = {
           meal_types: Array.isArray(mealTypes) ? mealTypes : [mealTypes],
           diet_filters: dietFilters || [],
           goal: profile.goal || '',
-          remaining,
+          remaining: remainingFull,
           liked: prefs.liked || [],
           disliked: prefs.disliked || [],
           hour_of_day: new Date().getHours(),
+          day_of_week: new Date().getDay(),
           recent_meal_names: recentMealNames,
-          meals_eaten_today: mealsEatenToday
+          recent_cuisines: recentCuisines,
+          recent_protein_sources: recentProteinSources,
+          meals_eaten_today: mealsEatenToday,
+          health_conditions: profile.healthConditions || [],
+          activity_level: profile.activityLevel || 'moderate',
+          gender: profile.gender || '',
+          age: profile.age || 0,
+          pantry: Store.getPantry(),
+          workout_calories_today: todayWorkoutCals,
+          has_recent_workout: hasRecentWorkout,
+          weight_trend: weightTrend
         })
       });
 

@@ -47,8 +47,19 @@ def suggest():
         'liked': data.get('liked', []),
         'disliked': data.get('disliked', []),
         'hour_of_day': data.get('hour_of_day'),
+        'day_of_week': data.get('day_of_week'),
         'recent_meal_names': data.get('recent_meal_names', []),
+        'recent_cuisines': data.get('recent_cuisines', []),
+        'recent_protein_sources': data.get('recent_protein_sources', []),
         'meals_eaten_today': data.get('meals_eaten_today', 0),
+        'health_conditions': data.get('health_conditions', []),
+        'activity_level': data.get('activity_level', 'moderate'),
+        'gender': data.get('gender', ''),
+        'age': data.get('age', 0),
+        'pantry': data.get('pantry', []),
+        'workout_calories_today': data.get('workout_calories_today', 0),
+        'has_recent_workout': data.get('has_recent_workout', False),
+        'weight_trend': data.get('weight_trend', 'stable'),
     }
     results = suggest_recipes(context, limit=5)
     if not results:
