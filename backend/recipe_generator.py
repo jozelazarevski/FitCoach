@@ -267,6 +267,7 @@ def generate_recipes_batch_ollama(base_url, model, prompt_info):
 
     prompt = _build_prompt(prompt_info)
 
+    # Try /api/chat first (newer Ollama), fall back to /api/generate (older versions)
     resp = _requests.post(
         f"{base_url}/api/chat",
         json={
@@ -280,8 +281,26 @@ def generate_recipes_batch_ollama(base_url, model, prompt_info):
         },
         timeout=300
     )
-    resp.raise_for_status()
-    text = resp.json().get("message", {}).get("content", "")
+    if resp.status_code == 404:
+        # Older Ollama — use /api/generate
+        resp = _requests.post(
+            f"{base_url}/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "num_predict": 16000,
+                    "temperature": 0.7,
+                }
+            },
+            timeout=300
+        )
+        resp.raise_for_status()
+        text = resp.json().get("response", "")
+    else:
+        resp.raise_for_status()
+        text = resp.json().get("message", {}).get("content", "")
     return _extract_json(text)
 
 
@@ -380,10 +399,18 @@ def run_generation(batch_id=None, batch_size=RECIPES_PER_API_CALL, max_items=Non
         key_data = get_active_api_key('ollama')
         ollama_url = (key_data or {}).get('api_key', '') or OLLAMA_BASE_URL
         ollama_model = model or (key_data or {}).get('model', '') or OLLAMA_MODEL
-        # Verify Ollama is reachable
+        # Verify Ollama is reachable (try both old and new endpoints)
         try:
-            check = _requests.get(f"{ollama_url}/api/list", timeout=5)
-            check.raise_for_status()
+            check = None
+            for endpoint in ("/api/tags", "/api/list"):
+                try:
+                    check = _requests.get(f"{ollama_url}{endpoint}", timeout=5)
+                    check.raise_for_status()
+                    break
+                except Exception:
+                    continue
+            if not check or not check.ok:
+                raise ConnectionError("No valid model list endpoint found")
             models = [m['name'] for m in check.json().get('models', [])]
             if not any(ollama_model in m for m in models):
                 print(f"WARNING: Model '{ollama_model}' not found. Available: {', '.join(models)}")
