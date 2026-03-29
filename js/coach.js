@@ -236,7 +236,6 @@ const Coach = {
 
   showSuggestions(result) {
     const container = UI.$('#coach-results');
-    const isDb = result.source === 'database';
     container.innerHTML = `
       ${result.top_pick_reason ? `<div class="top-pick-banner"><div class="top-pick-label">Why #1 is your best pick right now</div><div class="top-pick-text">${result.top_pick_reason}</div></div>` : ''}
       ${result.reasoning ? `<div class="coach-reasoning">${result.reasoning}</div>` : ''}
@@ -244,7 +243,7 @@ const Coach = {
         <div class="suggestion-card ${i === 0 ? 'top-pick' : ''}" id="suggestion-${i}">
           <div class="suggestion-rank-badge">
             ${i === 0 ? '#1 Best Pick' : `#${s.rank || i + 1}`}
-            <span class="sug-source ${isDb ? 'sug-source-db' : 'sug-source-ai'}">${isDb ? 'DB' : 'AI'}</span>
+            <span class="sug-source sug-source-db">DB</span>
           </div>
           <div class="suggestion-header">
             <div class="suggestion-title">${s.name}</div>
@@ -262,7 +261,7 @@ const Coach = {
             <span style="color:var(--fat-color)">${s.fat}g F</span>
           </div>
           <div class="suggestion-btn-row">
-            <button class="btn btn-recipe ${s.has_recipe ? 'instant' : ''}" data-index="${i}">${s.has_recipe ? 'View Recipe' : 'Generate Recipe'}</button>
+            <button class="btn btn-recipe instant" data-index="${i}">View Recipe</button>
             <button class="btn btn-log-suggestion" data-index="${i}">I ate this</button>
           </div>
           <div class="recipe-content" id="recipe-${i}"></div>
@@ -328,7 +327,7 @@ const Coach = {
         }
 
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Generating...';
+        btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Loading...';
 
         try {
           const recipe = await LLM.generateRecipe(suggestion, this.selectedDietFilters);
@@ -348,62 +347,13 @@ const Coach = {
   async generateMealPlan() {
     const profile = Store.getProfile();
 
-    // Try DB-powered meal plan first
     const dbPlan = await this._tryDbMealPlan(profile);
     if (dbPlan) {
       this._renderMealPlan(dbPlan);
       return;
     }
 
-    // Fallback to LLM
-    if (!profile.apiKey) { UI.toast('No recipes in database and no API key set', 'error'); return; }
-
-    UI.showLoading('Generating your weekly plan...');
-    const pantry = Store.getPantry();
-    const prefs = Store.getPreferences();
-    const conditions = profile.healthConditions || [];
-
-    const messages = [
-      { role: 'system', content: `You are an elite nutrition coach. Create a 7-day meal plan.
-Reply with ONLY valid JSON:
-{
-  "plan": [
-    { "day": "Monday", "meals": [
-      {"type": "breakfast", "name": "Meal name", "description": "portions", "calories": 0, "protein": 0, "carbs": 0, "fat": 0},
-      {"type": "lunch", "name": "...", "description": "...", "calories": 0, "protein": 0, "carbs": 0, "fat": 0},
-      {"type": "dinner", "name": "...", "description": "...", "calories": 0, "protein": 0, "carbs": 0, "fat": 0},
-      {"type": "snack", "name": "...", "description": "...", "calories": 0, "protein": 0, "carbs": 0, "fat": 0}
-    ]}
-  ]
-}
-Rules:
-- 7 days (Mon-Sun), 4 meals each (breakfast, lunch, dinner, snack)
-- Each day should hit daily macro targets closely
-- Maximum variety across the week
-- Practical, realistic meals with specific portions
-- Respect all dietary requirements and health conditions
-- Favor liked foods, avoid disliked foods
-${pantry.length > 0 ? `- Prefer using these ingredients: ${pantry.join(', ')}` : ''}
-${conditions.length > 0 ? `- Health conditions: ${conditions.join(', ')}` : ''}
-${prefs.liked.length > 0 ? `- Likes: ${prefs.liked.join(', ')}` : ''}
-${prefs.disliked.length > 0 ? `- Dislikes (AVOID): ${prefs.disliked.join(', ')}` : ''}` },
-      { role: 'user', content: `Create a 7-day meal plan for:
-- ${profile.gender}, ${profile.age}yo, ${profile.weight}${profile.unit === 'metric' ? 'kg' : 'lbs'}
-- Goal: ${profile.goal}
-- Daily targets: ${profile.macros.calories}cal / ${profile.macros.protein}g P / ${profile.macros.carbs}g C / ${profile.macros.fat}g F
-${this.selectedDietFilters.length > 0 ? `- Diet: ${this.selectedDietFilters.join(', ')}` : ''}` }
-    ];
-
-    try {
-      const response = await LLM.call(messages, profile, 4000);
-      const cleaned = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const result = JSON.parse(cleaned);
-      this._renderMealPlan({ plan: result.plan, source: 'ai' });
-    } catch (err) {
-      UI.toast(err.message || 'Failed to generate plan', 'error');
-    } finally {
-      UI.hideLoading();
-    }
+    UI.toast('Not enough recipes in the database to build a meal plan. Add more recipes via the admin panel.', 'error');
   },
 
   async _tryDbMealPlan(profile) {
@@ -440,7 +390,7 @@ ${this.selectedDietFilters.length > 0 ? `- Diet: ${this.selectedDietFilters.join
     container.innerHTML = `
       <div class="card-title" style="margin-bottom:12px">
         Your Weekly Meal Plan
-        ${result.source === 'database' ? '<span class="sug-source sug-source-db" style="margin-left:8px">From Recipe DB</span>' : ''}
+        <span class="sug-source sug-source-db" style="margin-left:8px">From Recipe DB</span>
       </div>
       ${result.plan.map(day => `
         <div class="card meal-plan-day">
