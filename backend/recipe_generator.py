@@ -268,10 +268,10 @@ def generate_recipes_batch_ollama(base_url, model, prompt_info):
     prompt = _build_prompt(prompt_info)
 
     resp = _requests.post(
-        f"{base_url}/api/generate",
+        f"{base_url}/api/chat",
         json={
             "model": model,
-            "prompt": prompt,
+            "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "options": {
                 "num_predict": 16000,
@@ -281,7 +281,7 @@ def generate_recipes_batch_ollama(base_url, model, prompt_info):
         timeout=300
     )
     resp.raise_for_status()
-    text = resp.json().get("response", "")
+    text = resp.json().get("message", {}).get("content", "")
     return _extract_json(text)
 
 
@@ -382,7 +382,7 @@ def run_generation(batch_id=None, batch_size=RECIPES_PER_API_CALL, max_items=Non
         ollama_model = model or (key_data or {}).get('model', '') or OLLAMA_MODEL
         # Verify Ollama is reachable
         try:
-            check = _requests.get(f"{ollama_url}/api/tags", timeout=5)
+            check = _requests.get(f"{ollama_url}/api/list", timeout=5)
             check.raise_for_status()
             models = [m['name'] for m in check.json().get('models', [])]
             if not any(ollama_model in m for m in models):
