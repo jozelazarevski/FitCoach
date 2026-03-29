@@ -309,15 +309,21 @@
     }
 
     // Dashboard
+    let dashboardTimer = null;
     async function renderDashboard(el) {
+      clearInterval(dashboardTimer);
       const stats = await api('/stats');
       document.getElementById('recipe-count-badge').textContent = `${stats.total_recipes} recipes`;
 
-      const topCuisines = Object.entries(stats.by_cuisine || {}).slice(0, 8);
-      const topMeals = Object.entries(stats.by_meal_type || {});
-      const topCats = Object.entries(stats.by_category || {});
+      const topCuisines = Object.entries(stats.by_cuisine || {}).sort((a,b) => b[1]-a[1]);
+      const topMeals = Object.entries(stats.by_meal_type || {}).sort((a,b) => b[1]-a[1]);
+      const topCats = Object.entries(stats.by_category || {}).sort((a,b) => b[1]-a[1]);
 
       el.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h2>Dashboard</h2>
+          <button class="btn btn-outline btn-sm" id="btn-refresh-dash">Refresh</button>
+        </div>
         <div class="stats-grid">
           <div class="stat-card"><div class="stat-label">Total Recipes</div><div class="stat-value accent">${stats.total_recipes}</div></div>
           <div class="stat-card"><div class="stat-label">Avg Calories</div><div class="stat-value green">${stats.avg_macros.calories}</div></div>
@@ -326,7 +332,7 @@
         </div>
         <div class="stats-grid">
           <div class="table-wrap">
-            <div class="table-header"><h2>By Cuisine</h2></div>
+            <div class="table-header"><h2>By Cuisine (${topCuisines.length})</h2></div>
             <table><tbody>${topCuisines.map(([k, v]) => `<tr><td>${k}</td><td style="color:var(--dim)">${v}</td></tr>`).join('')}</tbody></table>
           </div>
           <div class="table-wrap">
@@ -339,6 +345,12 @@
           </div>
         </div>
       `;
+      document.getElementById('btn-refresh-dash').onclick = () => renderDashboard(el);
+      // Auto-refresh every 10s while on dashboard
+      dashboardTimer = setInterval(() => {
+        if (currentTab === 'dashboard') renderDashboard(el);
+        else clearInterval(dashboardTimer);
+      }, 10000);
     }
 
     // Recipes
@@ -355,11 +367,18 @@
 
       const data = await api(`/recipes${qs}`);
 
+      // Get actual cuisines from stats for filter dropdown
+      let cuisineList = [];
+      try {
+        const stats = await api('/stats');
+        cuisineList = Object.keys(stats.by_cuisine || {}).sort();
+      } catch {}
+
       el.innerHTML = `
         <div class="filter-bar">
           <input type="text" id="search-input" placeholder="Search recipes..." value="${search}">
           <select id="filter-cuisine"><option value="">All Cuisines</option>
-            ${['Italian','Mexican','Thai','Japanese','Indian','Greek','Mediterranean','Korean','Chinese','Vietnamese','Middle Eastern','French','American','Moroccan'].map(c => `<option ${cuisine===c?'selected':''}>${c}</option>`).join('')}
+            ${cuisineList.map(c => `<option ${cuisine===c?'selected':''}>${c}</option>`).join('')}
           </select>
           <select id="filter-meal"><option value="">All Meals</option>
             ${['breakfast','lunch','dinner','snack','pre_workout','post_workout'].map(m => `<option ${meal===m?'selected':''}>${m}</option>`).join('')}
@@ -624,26 +643,39 @@
     }
 
     // Generate
+    let genTimer = null;
     async function renderGenerate(el) {
+      clearInterval(genTimer);
       let jobsHtml = '';
+      let hasRunning = false;
       try {
         const jobs = await api('/generate/status');
         if (Array.isArray(jobs) && jobs.length > 0) {
+          hasRunning = jobs.some(j => j.status === 'running');
           jobsHtml = `
             <div class="table-wrap" style="margin-bottom:24px">
-              <div class="table-header"><h2>Generation Jobs</h2></div>
+              <div class="table-header">
+                <h2>Generation Jobs</h2>
+                <button class="btn btn-outline btn-sm" id="btn-refresh-gen">Refresh</button>
+              </div>
               <table>
-                <thead><tr><th>Batch ID</th><th>Status</th><th>Planned</th><th>Completed</th><th>Failed</th><th>Created</th></tr></thead>
-                <tbody>${jobs.map(j => `
+                <thead><tr><th>Batch ID</th><th>Status</th><th>Planned</th><th>Completed</th><th>Failed</th><th>Progress</th><th>Created</th></tr></thead>
+                <tbody>${jobs.map(j => {
+                  const pct = j.total_planned > 0 ? Math.round((j.completed / j.total_planned) * 100) : 0;
+                  return `
                   <tr>
                     <td><code>${j.batch_id}</code></td>
-                    <td><span class="badge ${j.status === 'completed' ? 'badge-green' : j.status === 'running' ? 'badge-yellow' : 'badge-red'}">${j.status}</span></td>
+                    <td><span class="badge ${j.status === 'completed' ? 'badge-green' : j.status === 'running' ? 'badge-yellow' : j.status === 'completed_with_errors' ? 'badge-yellow' : 'badge-red'}">${j.status}</span></td>
                     <td>${j.total_planned}</td>
                     <td>${j.completed}</td>
                     <td>${j.failed}</td>
-                    <td>${j.created_at}</td>
+                    <td style="min-width:120px">
+                      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+                      <span style="font-size:11px;color:var(--dim)">${pct}%</span>
+                    </td>
+                    <td style="font-size:12px">${j.created_at}</td>
                   </tr>
-                `).join('')}</tbody>
+                `;}).join('')}</tbody>
               </table>
             </div>
           `;
@@ -659,7 +691,7 @@
             <div class="form-row" style="margin-bottom:12px">
               <div class="form-group">
                 <label>Recipes per API call</label>
-                <input type="number" id="gen-batch-size" value="10" min="1" max="20">
+                <input type="number" id="gen-batch-size" value="5" min="1" max="20">
               </div>
               <div class="form-group">
                 <label>Max prompt combos (blank = all ~5000+)</label>
@@ -675,6 +707,17 @@
           </div>
         </div>
       `;
+
+      if (document.getElementById('btn-refresh-gen')) {
+        document.getElementById('btn-refresh-gen').onclick = () => renderGenerate(el);
+      }
+      // Auto-refresh every 5s if a job is running
+      if (hasRunning) {
+        genTimer = setInterval(() => {
+          if (currentTab === 'generate') renderGenerate(el);
+          else clearInterval(genTimer);
+        }, 5000);
+      }
 
       document.getElementById('btn-start-gen').onclick = async () => {
         const batchSize = +document.getElementById('gen-batch-size').value || 10;
