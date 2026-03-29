@@ -308,14 +308,17 @@ def run_generation(batch_id=None, batch_size=RECIPES_PER_API_CALL, max_items=Non
 
     init_db()
 
-    # Try DB-stored key first, then env var
-    api_key = ANTHROPIC_API_KEY
+    # Try DB-stored key first (from admin panel), then env var
+    api_key = None
+    from backend.api.admin import get_active_api_key
+    key_data = get_active_api_key('anthropic')
+    if key_data:
+        api_key = key_data['api_key']
+        print("Using API key from database")
     if not api_key:
-        from backend.api.admin import get_active_api_key
-        key_data = get_active_api_key('anthropic')
-        if key_data:
-            api_key = key_data['api_key']
-            print(f"Using API key from database")
+        api_key = ANTHROPIC_API_KEY
+        if api_key:
+            print("Using API key from environment")
 
     if not api_key:
         print("ERROR: No API key found. Set ANTHROPIC_API_KEY env var or add one via admin panel.")
