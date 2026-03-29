@@ -220,7 +220,7 @@ def generate_recipes_batch(client, prompt_info):
 
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=8000,
+        max_tokens=16000,
         messages=[{"role": "user", "content": prompt}]
     )
 
