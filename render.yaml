@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: fitcoach
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python start.py && gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: FITCOACH_DB
+        value: /opt/render/project/data/fitcoach.db
+      - key: SECRET_KEY
+        generateValue: true
+    disk:
+      name: fitcoach-data
+      mountPath: /opt/render/project/data
+      sizeGB: 1

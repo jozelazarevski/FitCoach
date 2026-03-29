@@ -1,22 +1,26 @@
 {
   "name": "FitCoach - AI Macro Tracker",
   "short_name": "FitCoach",
-  "description": "AI-powered fitness & macro coaching tracker",
-  "start_url": "/index.html",
+  "description": "AI-powered fitness & macro coaching tracker with smart recipe recommendations",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#0a0a0f",
   "theme_color": "#6c5ce7",
   "orientation": "portrait",
+  "categories": ["health", "fitness", "food"],
   "icons": [
     {
-      "src": "icons/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png"
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     },
     {
-      "src": "icons/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png"
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ]
 }

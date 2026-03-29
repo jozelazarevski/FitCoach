@@ -63,6 +63,11 @@ def service_worker():
     return send_from_directory('.', 'sw.js')
 
 
+@app.route('/icons/<path:filename>')
+def serve_icons(filename):
+    return send_from_directory('icons', filename)
+
+
 # Serve only whitelisted static directories
 @app.route('/js/<path:filename>')
 def serve_js(filename):

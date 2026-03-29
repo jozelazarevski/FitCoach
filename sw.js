@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fitcoach-v7';
+const CACHE_NAME = 'fitcoach-v8';
 const ASSETS = [
   '/index.html',
   '/css/style.css',
@@ -11,7 +11,8 @@ const ASSETS = [
   '/js/profile.js',
   '/js/ui.js',
   '/js/body.js',
-  '/manifest.json'
+  '/manifest.json',
+  '/icons/icon.svg'
 ];
 
 self.addEventListener('install', e => {
