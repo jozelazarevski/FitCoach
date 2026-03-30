@@ -17,7 +17,7 @@ try:
 except ImportError:
     _requests = None
 
-from config import ANTHROPIC_API_KEY, OLLAMA_BASE_URL, OLLAMA_MODEL
+from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, OLLAMA_BASE_URL, OLLAMA_MODEL
 
 
 def _get_provider_config():
@@ -33,7 +33,7 @@ def _get_provider_config():
         return {
             'provider': 'anthropic',
             'api_key': anthropic_data['api_key'],
-            'model': anthropic_data.get('model', '') or 'claude-3-5-haiku-20241022'
+            'model': anthropic_data.get('model', '') or ANTHROPIC_MODEL
         }
 
     # Try Anthropic from env
@@ -41,7 +41,7 @@ def _get_provider_config():
         return {
             'provider': 'anthropic',
             'api_key': ANTHROPIC_API_KEY,
-            'model': 'claude-3-5-haiku-20241022'
+            'model': ANTHROPIC_MODEL
         }
 
     # Fallback: Ollama (local dev only)

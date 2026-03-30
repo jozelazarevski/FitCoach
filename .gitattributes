@@ -1,0 +1,5 @@
+# Mark large data files as binary (better diff handling)
+*.csv binary
+*.json linguist-detectable=false
+fuel_5000_recipes.csv filter=lfs diff=lfs merge=lfs -text
+recipes_1000.json filter=lfs diff=lfs merge=lfs -text

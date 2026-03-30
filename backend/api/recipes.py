@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify
 from backend.db import use_db
 from backend.models import get_recipe, search_recipes, suggest_recipes, recipe_to_dict, insert_recipe
 from backend.tag_engine import detect_cuisine, compute_tags, compute_deterministic_tags
+from backend.validation import validate_suggestion_response, validate_generated_recipe, validate_meal_plan
 
 recipes_bp = Blueprint('recipes', __name__)
 
@@ -230,6 +231,11 @@ Rules:
     try:
         result = call_llm_json(prompt, max_tokens=3000)
         if isinstance(result, dict) and 'suggestions' in result:
+            # Validate LLM response structure with Pydantic
+            validated = validate_suggestion_response(result)
+            if not validated:
+                logging.warning("LLM suggestion response failed validation, using raw response")
+
             saved_count = 0
             for s in result['suggestions']:
                 s['source'] = 'llm'
@@ -332,6 +338,11 @@ Rules:
     try:
         result = call_llm_json(prompt, max_tokens=3000)
         if isinstance(result, dict) and ('ingredients' in result or 'steps' in result):
+            # Validate LLM response structure with Pydantic
+            validated = validate_generated_recipe(result)
+            if not validated:
+                logging.warning("LLM recipe response failed validation, using raw response")
+
             # Save full recipe to DB — next time it's free
             db_id = _save_full_recipe_to_db(result, cuisine, category, diet_filters)
             if db_id:
@@ -581,6 +592,11 @@ Rules:
     try:
         result = call_llm_json(prompt, max_tokens=6000)
         if isinstance(result, dict) and 'plan' in result:
+            # Validate LLM response structure with Pydantic
+            validated = validate_meal_plan(result)
+            if not validated:
+                logging.warning("LLM meal plan response failed validation, using raw response")
+
             # Cache every meal from the plan to DB
             saved = 0
             for day in result.get('plan', []):
