@@ -1,4 +1,5 @@
 import json
+import logging
 from flask import Blueprint, request, jsonify
 from backend.db import use_db
 from backend.models import get_recipe, search_recipes, suggest_recipes, recipe_to_dict, insert_recipe
@@ -21,7 +22,7 @@ def _log_cost(endpoint, served_from, recipe_count=0):
             )
             db.commit()
     except Exception:
-        pass  # non-critical
+        logging.debug("Failed to log cost entry", exc_info=True)
 
 
 def _save_suggestion_to_db(s):
@@ -83,6 +84,7 @@ def _save_suggestion_to_db(s):
         recipe_id = insert_recipe(recipe_data, tags_dict=tags)
         return recipe_id
     except Exception:
+        logging.warning("Failed to cache LLM suggestion to DB", exc_info=True)
         return None
 
 
@@ -156,6 +158,7 @@ def _save_full_recipe_to_db(result, cuisine='', category='', diet_filters=None):
         recipe_id = insert_recipe(recipe_data, tags_dict=tags)
         return recipe_id
     except Exception:
+        logging.warning("Failed to cache full LLM recipe to DB", exc_info=True)
         return None
 
 
@@ -366,8 +369,11 @@ def list_recipes():
         'goal': request.args.get('goal'),
     }
     filters = {k: v for k, v in filters.items() if v is not None}
-    page = int(request.args.get('page', 1))
-    per_page = min(int(request.args.get('per_page', 20)), 100)
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        per_page = min(max(1, int(request.args.get('per_page', 20))), 100)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid pagination parameters'}), 400
 
     result = search_recipes(filters, page, per_page)
     return jsonify(result)

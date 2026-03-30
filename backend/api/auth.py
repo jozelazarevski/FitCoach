@@ -173,6 +173,11 @@ def sync_data():
     if not user:
         return jsonify({'error': 'Not authenticated'}), 401
 
+    from config import MAX_SYNC_SIZE_BYTES
+    content_length = request.content_length or 0
+    if content_length > MAX_SYNC_SIZE_BYTES:
+        return jsonify({'error': 'Sync payload too large'}), 413
+
     data = request.get_json() or {}
     user_data = data.get('data', {})
 

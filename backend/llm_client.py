@@ -4,6 +4,7 @@ Used by recipe suggestion and generation endpoints.
 """
 
 import json
+import logging
 import os
 
 try:
@@ -68,10 +69,15 @@ def call_llm(prompt, max_tokens=4000):
     if not config:
         raise RuntimeError("No LLM provider configured. Add your Anthropic API key via admin panel or set ANTHROPIC_API_KEY env var.")
 
+    from backend.api.admin import record_api_key_usage
+
     if config['provider'] == 'ollama':
-        return _call_ollama(config['url'], config['model'], prompt, max_tokens)
+        result = _call_ollama(config['url'], config['model'], prompt, max_tokens)
     else:
-        return _call_anthropic(config['api_key'], config['model'], prompt, max_tokens)
+        result = _call_anthropic(config['api_key'], config['model'], prompt, max_tokens)
+
+    record_api_key_usage(config['provider'])
+    return result
 
 
 def _call_ollama(base_url, model, prompt, max_tokens):
