@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FitCoach Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #0a0a0f; --surface: #141420; --surface2: #1c1c2e;
+      --border: #2a2a3e; --text: #e8e8f0; --dim: #8888aa;
+      --accent: #6c5ce7; --accent2: #a855f7; --green: #10b981;
+      --red: #ef4444; --yellow: #f59e0b; --blue: #3b82f6;
+    }
+    body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    .login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .login-box { background: var(--surface); padding: 40px; border-radius: 16px; border: 1px solid var(--border); width: 360px; }
+    .login-box h1 { font-size: 24px; margin-bottom: 24px; text-align: center; }
+    input, select, textarea { width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 14px; margin-bottom: 12px; outline: none; }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    .btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent2); }
+    .btn-danger { background: var(--red); color: white; }
+    .btn-success { background: var(--green); color: white; }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn-outline:hover { border-color: var(--accent); }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .btn-full { width: 100%; }
+
+    /* Layout */
+    .app { display: none; }
+    .app.active { display: block; }
+    .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .header h1 { font-size: 20px; background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-actions { display: flex; gap: 8px; align-items: center; }
+    .nav-tabs { display: flex; gap: 0; background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; overflow-x: auto; }
+    .nav-tab { padding: 12px 20px; cursor: pointer; font-size: 14px; color: var(--dim); border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; }
+    .nav-tab:hover { color: var(--text); }
+    .nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .content { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+    /* Cards */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .stat-label { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+    .stat-value { font-size: 32px; font-weight: 700; margin-top: 4px; }
+    .stat-value.accent { color: var(--accent); }
+    .stat-value.green { color: var(--green); }
+    .stat-value.blue { color: var(--blue); }
+    .stat-value.yellow { color: var(--yellow); }
+
+    /* Table */
+    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .table-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+    .table-header h2 { font-size: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 10px 16px; font-size: 12px; color: var(--dim); text-transform: uppercase; border-bottom: 1px solid var(--border); }
+    td { padding: 12px 16px; font-size: 14px; border-bottom: 1px solid var(--border); }
+    tr:hover td { background: var(--surface2); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .badge-green { background: rgba(16,185,129,0.15); color: var(--green); }
+    .badge-yellow { background: rgba(245,158,11,0.15); color: var(--yellow); }
+    .badge-red { background: rgba(239,68,68,0.15); color: var(--red); }
+    .badge-blue { background: rgba(59,130,246,0.15); color: var(--blue); }
+
+    /* Pagination */
+    .pagination { display: flex; justify-content: center; gap: 8px; padding: 16px; }
+    .page-btn { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; font-size: 13px; }
+    .page-btn.active { background: var(--accent); border-color: var(--accent); }
+    .page-btn:hover { border-color: var(--accent); }
+
+    /* Tag stats */
+    .tag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+    .tag-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .tag-card h3 { font-size: 14px; color: var(--accent); margin-bottom: 12px; text-transform: capitalize; }
+    .tag-item { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+    .tag-item .name { color: var(--text); }
+    .tag-item .count { color: var(--dim); }
+    .tag-bar { height: 4px; background: var(--surface2); border-radius: 2px; margin-top: 2px; }
+    .tag-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 200; align-items: center; justify-content: center; }
+    .modal-overlay.show { display: flex; }
+    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto; }
+    .modal h2 { margin-bottom: 16px; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 4px; text-transform: uppercase; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    /* Generate panel */
+    .gen-status { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .progress-bar { height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--green)); border-radius: 4px; transition: width 0.3s; }
+
+    /* Search/filter bar */
+    .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+    .filter-bar input, .filter-bar select { margin-bottom: 0; width: auto; flex: 1; min-width: 150px; }
+
+    .toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; border-radius: 8px; background: var(--green); color: white; font-size: 14px; z-index: 300; display: none; }
+    .toast.error { background: var(--red); }
+    .toast.show { display: block; }
+
+    @media (max-width: 768px) {
+      .content { padding: 16px; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .form-row { grid-template-columns: 1fr; }
+      .filter-bar { flex-direction: column; }
+      .filter-bar input, .filter-bar select { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Login -->
+  <div class="login-screen" id="login-screen">
+    <div class="login-box">
+      <h1>FitCoach Admin</h1>
+      <input type="password" id="login-pass" placeholder="Admin password" autofocus>
+      <button class="btn btn-primary btn-full" id="btn-login">Login</button>
+      <p style="font-size:12px;color:var(--dim);margin-top:12px;text-align:center">Default: fitcoach-admin</p>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div class="app" id="admin-app">
+    <div class="header">
+      <h1>FitCoach Admin</h1>
+      <div class="header-actions">
+        <span id="recipe-count-badge" style="font-size:13px;color:var(--dim)"></span>
+        <button class="btn btn-outline btn-sm" id="btn-logout">Logout</button>
+      </div>
+    </div>
+    <div class="nav-tabs">
+      <div class="nav-tab active" data-tab="dashboard">Dashboard</div>
+      <div class="nav-tab" data-tab="recipes">Recipes</div>
+      <div class="nav-tab" data-tab="tags">Tags</div>
+      <div class="nav-tab" data-tab="apikeys">API Keys</div>
+      <div class="nav-tab" data-tab="generate">Generate</div>
+      <div class="nav-tab" data-tab="savings">LLM Savings</div>
+    </div>
+    <div class="content" id="tab-content"></div>
+  </div>
+
+  <!-- Recipe Modal -->
+  <div class="modal-overlay" id="recipe-modal">
+    <div class="modal">
+      <h2 id="modal-title">Add Recipe</h2>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="r-name" placeholder="Recipe name">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Category</label>
+          <select id="r-category">
+            <option value="poultry">Poultry</option>
+            <option value="red_meat">Red Meat</option>
+            <option value="fish">Fish</option>
+            <option value="seafood">Seafood</option>
+            <option value="vegan">Vegan</option>
+            <option value="vegetarian">Vegetarian</option>
+            <option value="general">General</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Meal Type</label>
+          <select id="r-meal_type">
+            <option value="breakfast">Breakfast</option>
+            <option value="lunch">Lunch</option>
+            <option value="dinner">Dinner</option>
+            <option value="snack">Snack</option>
+            <option value="pre_workout">Pre-Workout</option>
+            <option value="post_workout">Post-Workout</option>
+            <option value="any">Any</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input type="text" id="r-description" placeholder="Brief description">
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Calories</label><input type="number" id="r-calories" placeholder="0"></div>
+        <div class="form-group"><label>Protein (g)</label><input type="number" id="r-protein" placeholder="0"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Carbs (g)</label><input type="number" id="r-carbs" placeholder="0"></div>
+        <div class="form-group"><label>Fat (g)</label><input type="number" id="r-fat" placeholder="0"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Fiber (g)</label><input type="number" id="r-fiber" placeholder="0"></div>
+        <div class="form-group"><label>Sugar (g)</label><input type="number" id="r-sugar" placeholder="0"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Prep Time (min)</label><input type="number" id="r-prep_time_min" placeholder="0"></div>
+        <div class="form-group"><label>Cook Time (min)</label><input type="number" id="r-cook_time_min" placeholder="0"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Servings</label><input type="number" id="r-servings" placeholder="1"></div>
+        <div class="form-group"><label>Difficulty</label>
+          <select id="r-difficulty">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Ingredients (one per line)</label>
+        <textarea id="r-ingredients" rows="6" placeholder="200g chicken breast&#10;1 tbsp olive oil&#10;..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Steps (one per line)</label>
+        <textarea id="r-steps" rows="6" placeholder="Season the chicken...&#10;Heat oil in pan..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Tips</label>
+        <input type="text" id="r-tips" placeholder="Coach tip...">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn btn-primary" id="btn-save-recipe">Save</button>
+        <button class="btn btn-outline" id="btn-cancel-modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const API = '/api/admin';
+    let token = localStorage.getItem('admin_token');
+    let currentTab = 'dashboard';
+    let recipePage = 1;
+    let editingRecipeId = null;
+
+    // Auth
+    function headers() {
+      return { 'Content-Type': 'application/json', 'X-Admin-Token': token };
+    }
+
+    async function api(path, opts = {}) {
+      const res = await fetch(`${API}${path}`, { headers: headers(), ...opts });
+      const data = await res.json();
+      if (res.status === 401) { logout(); throw new Error('Unauthorized'); }
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    function toast(msg, isError = false) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = 'toast show' + (isError ? ' error' : '');
+      setTimeout(() => t.className = 'toast', 3000);
+    }
+
+    // Login/Logout
+    document.getElementById('btn-login').onclick = async () => {
+      const pass = document.getElementById('login-pass').value;
+      try {
+        const res = await fetch(`${API}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pass })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        token = data.token;
+        localStorage.setItem('admin_token', token);
+        showApp();
+      } catch (e) { toast(e.message, true); }
+    };
+    document.getElementById('login-pass').onkeydown = e => { if (e.key === 'Enter') document.getElementById('btn-login').click(); };
+
+    function logout() {
+      token = null;
+      localStorage.removeItem('admin_token');
+      document.getElementById('login-screen').style.display = 'flex';
+      document.getElementById('admin-app').classList.remove('active');
+    }
+    document.getElementById('btn-logout').onclick = logout;
+
+    async function showApp() {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('admin-app').classList.add('active');
+      renderTab(currentTab);
+    }
+
+    // Tabs
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+      tab.onclick = () => {
+        document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        currentTab = tab.dataset.tab;
+        renderTab(currentTab);
+      };
+    });
+
+    async function renderTab(tab) {
+      const el = document.getElementById('tab-content');
+      try {
+        switch (tab) {
+          case 'dashboard': await renderDashboard(el); break;
+          case 'recipes': await renderRecipes(el); break;
+          case 'tags': await renderTags(el); break;
+          case 'apikeys': await renderApiKeys(el); break;
+          case 'generate': await renderGenerate(el); break;
+          case 'savings': await renderSavings(el); break;
+        }
+      } catch (e) { el.innerHTML = `<p style="color:var(--red)">${e.message}</p>`; }
+    }
+
+    // Dashboard
+    let dashboardTimer = null;
+    async function renderDashboard(el) {
+      clearInterval(dashboardTimer);
+      const stats = await api('/stats');
+      document.getElementById('recipe-count-badge').textContent = `${stats.total_recipes} recipes`;
+
+      const topCuisines = Object.entries(stats.by_cuisine || {}).sort((a,b) => b[1]-a[1]);
+      const topMeals = Object.entries(stats.by_meal_type || {}).sort((a,b) => b[1]-a[1]);
+      const topCats = Object.entries(stats.by_category || {}).sort((a,b) => b[1]-a[1]);
+
+      el.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h2>Dashboard</h2>
+          <button class="btn btn-outline btn-sm" id="btn-refresh-dash">Refresh</button>
+        </div>
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-label">Total Recipes</div><div class="stat-value accent">${stats.total_recipes}</div></div>
+          <div class="stat-card"><div class="stat-label">Avg Calories</div><div class="stat-value green">${stats.avg_macros.calories}</div></div>
+          <div class="stat-card"><div class="stat-label">Avg Protein</div><div class="stat-value blue">${stats.avg_macros.protein}g</div></div>
+          <div class="stat-card"><div class="stat-label">Cuisines</div><div class="stat-value yellow">${Object.keys(stats.by_cuisine || {}).length}</div></div>
+        </div>
+        <div class="stats-grid">
+          <div class="table-wrap">
+            <div class="table-header"><h2>By Cuisine (${topCuisines.length})</h2></div>
+            <table><tbody>${topCuisines.map(([k, v]) => `<tr><td>${k}</td><td style="color:var(--dim)">${v}</td></tr>`).join('')}</tbody></table>
+          </div>
+          <div class="table-wrap">
+            <div class="table-header"><h2>By Meal Type</h2></div>
+            <table><tbody>${topMeals.map(([k, v]) => `<tr><td>${k}</td><td style="color:var(--dim)">${v}</td></tr>`).join('')}</tbody></table>
+          </div>
+          <div class="table-wrap">
+            <div class="table-header"><h2>By Category</h2></div>
+            <table><tbody>${topCats.map(([k, v]) => `<tr><td>${k}</td><td style="color:var(--dim)">${v}</td></tr>`).join('')}</tbody></table>
+          </div>
+        </div>
+      `;
+      document.getElementById('btn-refresh-dash').onclick = () => renderDashboard(el);
+      // Auto-refresh every 10s while on dashboard
+      dashboardTimer = setInterval(() => {
+        if (currentTab === 'dashboard') renderDashboard(el);
+        else clearInterval(dashboardTimer);
+      }, 10000);
+    }
+
+    // Recipes
+    async function renderRecipes(el, page = 1) {
+      recipePage = page;
+      const search = document.getElementById('search-input')?.value || '';
+      const cuisine = document.getElementById('filter-cuisine')?.value || '';
+      const meal = document.getElementById('filter-meal')?.value || '';
+
+      let qs = `?page=${page}&per_page=25`;
+      if (search) qs += `&search=${encodeURIComponent(search)}`;
+      if (cuisine) qs += `&cuisine=${encodeURIComponent(cuisine)}`;
+      if (meal) qs += `&meal_type=${encodeURIComponent(meal)}`;
+
+      const data = await api(`/recipes${qs}`);
+
+      // Get actual cuisines from stats for filter dropdown
+      let cuisineList = [];
+      try {
+        const stats = await api('/stats');
+        cuisineList = Object.keys(stats.by_cuisine || {}).sort();
+      } catch {}
+
+      el.innerHTML = `
+        <div class="filter-bar">
+          <input type="text" id="search-input" placeholder="Search recipes..." value="${search}">
+          <select id="filter-cuisine"><option value="">All Cuisines</option>
+            ${cuisineList.map(c => `<option ${cuisine===c?'selected':''}>${c}</option>`).join('')}
+          </select>
+          <select id="filter-meal"><option value="">All Meals</option>
+            ${['breakfast','lunch','dinner','snack','pre_workout','post_workout'].map(m => `<option ${meal===m?'selected':''}>${m}</option>`).join('')}
+          </select>
+          <button class="btn btn-primary btn-sm" id="btn-filter">Filter</button>
+          <button class="btn btn-success btn-sm" id="btn-add-recipe">+ Add Recipe</button>
+        </div>
+        <div class="table-wrap">
+          <div class="table-header"><h2>Recipes (${data.total})</h2></div>
+          <table>
+            <thead><tr><th>ID</th><th>Name</th><th>Cuisine</th><th>Meal</th><th>Cal</th><th>Prot</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              ${data.recipes.map(r => `
+                <tr>
+                  <td>${r.id}</td>
+                  <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</td>
+                  <td><span class="badge badge-blue">${r.cuisine || '-'}</span></td>
+                  <td>${r.meal_type || '-'}</td>
+                  <td>${r.calories}</td>
+                  <td>${r.protein}g</td>
+                  <td><span class="badge ${r.status==='active'?'badge-green':'badge-red'}">${r.status}</span></td>
+                  <td>
+                    <button class="btn btn-outline btn-sm btn-edit" data-id="${r.id}">Edit</button>
+                    <button class="btn btn-danger btn-sm btn-delete" data-id="${r.id}">Del</button>
+                  </td>
+                </tr>
+              `).join('')}
+              ${data.recipes.length === 0 ? '<tr><td colspan="8" style="text-align:center;color:var(--dim)">No recipes found</td></tr>' : ''}
+            </tbody>
+          </table>
+          ${data.pages > 1 ? `
+            <div class="pagination">
+              ${Array.from({length: Math.min(data.pages, 10)}, (_, i) => i + 1).map(p =>
+                `<button class="page-btn ${p===page?'active':''}" data-page="${p}">${p}</button>`
+              ).join('')}
+              ${data.pages > 10 ? `<span style="color:var(--dim)">... ${data.pages}</span>` : ''}
+            </div>
+          ` : ''}
+        </div>
+      `;
+
+      // Bind events
+      document.getElementById('btn-filter').onclick = () => renderRecipes(el, 1);
+      document.getElementById('search-input').onkeydown = e => { if (e.key === 'Enter') renderRecipes(el, 1); };
+      document.getElementById('filter-cuisine').onchange = () => renderRecipes(el, 1);
+      document.getElementById('filter-meal').onchange = () => renderRecipes(el, 1);
+      document.getElementById('btn-add-recipe').onclick = () => openRecipeModal();
+      el.querySelectorAll('.page-btn').forEach(b => b.onclick = () => renderRecipes(el, +b.dataset.page));
+      el.querySelectorAll('.btn-edit').forEach(b => b.onclick = () => openRecipeModal(+b.dataset.id));
+      el.querySelectorAll('.btn-delete').forEach(b => b.onclick = async () => {
+        if (!confirm('Archive this recipe?')) return;
+        await api(`/recipes/${b.dataset.id}`, { method: 'DELETE' });
+        toast('Recipe archived');
+        renderRecipes(el, page);
+      });
+    }
+
+    async function openRecipeModal(id = null) {
+      editingRecipeId = id;
+      document.getElementById('modal-title').textContent = id ? 'Edit Recipe' : 'Add Recipe';
+
+      if (id) {
+        const r = await fetch(`/api/recipes/${id}`, { headers: headers() }).then(r => r.json());
+        document.getElementById('r-name').value = r.name || '';
+        document.getElementById('r-category').value = r.category || 'general';
+        document.getElementById('r-meal_type').value = r.meal_type || 'any';
+        document.getElementById('r-description').value = r.description || '';
+        document.getElementById('r-calories').value = r.calories || 0;
+        document.getElementById('r-protein').value = r.protein || 0;
+        document.getElementById('r-carbs').value = r.carbs || 0;
+        document.getElementById('r-fat').value = r.fat || 0;
+        document.getElementById('r-fiber').value = r.fiber || 0;
+        document.getElementById('r-sugar').value = r.sugar || 0;
+        document.getElementById('r-prep_time_min').value = r.prep_time_min || 0;
+        document.getElementById('r-cook_time_min').value = r.cook_time_min || 0;
+        document.getElementById('r-servings').value = r.servings || 1;
+        document.getElementById('r-difficulty').value = r.difficulty || 'medium';
+        document.getElementById('r-ingredients').value = (r.ingredients || []).join('\n');
+        document.getElementById('r-steps').value = (r.steps || []).join('\n');
+        document.getElementById('r-tips').value = r.tips || '';
+      } else {
+        document.querySelectorAll('#recipe-modal input, #recipe-modal textarea').forEach(i => i.value = '');
+        document.getElementById('r-servings').value = '1';
+      }
+      document.getElementById('recipe-modal').classList.add('show');
+    }
+
+    document.getElementById('btn-cancel-modal').onclick = () => {
+      document.getElementById('recipe-modal').classList.remove('show');
+    };
+    document.getElementById('recipe-modal').onclick = e => {
+      if (e.target.id === 'recipe-modal') document.getElementById('recipe-modal').classList.remove('show');
+    };
+
+    document.getElementById('btn-save-recipe').onclick = async () => {
+      const data = {
+        name: document.getElementById('r-name').value,
+        category: document.getElementById('r-category').value,
+        meal_type: document.getElementById('r-meal_type').value,
+        description: document.getElementById('r-description').value,
+        calories: +document.getElementById('r-calories').value || 0,
+        protein: +document.getElementById('r-protein').value || 0,
+        carbs: +document.getElementById('r-carbs').value || 0,
+        fat: +document.getElementById('r-fat').value || 0,
+        fiber: +document.getElementById('r-fiber').value || 0,
+        sugar: +document.getElementById('r-sugar').value || 0,
+        prep_time_min: +document.getElementById('r-prep_time_min').value || 0,
+        cook_time_min: +document.getElementById('r-cook_time_min').value || 0,
+        servings: +document.getElementById('r-servings').value || 1,
+        difficulty: document.getElementById('r-difficulty').value,
+        ingredients: document.getElementById('r-ingredients').value.split('\n').filter(s => s.trim()),
+        steps: document.getElementById('r-steps').value.split('\n').filter(s => s.trim()),
+        tips: document.getElementById('r-tips').value,
+      };
+
+      if (!data.name) { toast('Name required', true); return; }
+
+      try {
+        if (editingRecipeId) {
+          await api(`/recipes/${editingRecipeId}`, { method: 'PUT', body: JSON.stringify(data) });
+          toast('Recipe updated');
+        } else {
+          await api('/recipes', { method: 'POST', body: JSON.stringify(data) });
+          toast('Recipe created');
+        }
+        document.getElementById('recipe-modal').classList.remove('show');
+        renderTab('recipes');
+      } catch (e) { toast(e.message, true); }
+    };
+
+    // Tags
+    async function renderTags(el) {
+      const tags = await api('/tags');
+      const dims = Object.keys(tags).sort();
+
+      el.innerHTML = `
+        <h2 style="margin-bottom:16px">Tag Dimensions (${dims.length})</h2>
+        <div class="tag-grid">
+          ${dims.map(dim => {
+            const entries = Object.entries(tags[dim]).sort((a, b) => b[1] - a[1]);
+            const maxCount = entries[0]?.[1] || 1;
+            return `
+              <div class="tag-card">
+                <h3>${dim.replace(/_/g, ' ')} (${entries.length})</h3>
+                ${entries.slice(0, 15).map(([tag, count]) => `
+                  <div class="tag-item">
+                    <span class="name">${tag.replace(/_/g, ' ')}</span>
+                    <span class="count">${count}</span>
+                  </div>
+                  <div class="tag-bar"><div class="tag-bar-fill" style="width:${(count/maxCount*100).toFixed(0)}%"></div></div>
+                `).join('')}
+                ${entries.length > 15 ? `<div style="font-size:12px;color:var(--dim);margin-top:8px">+${entries.length - 15} more</div>` : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    // API Keys
+    async function renderApiKeys(el) {
+      const data = await api('/api-keys');
+      const keys = data.keys || [];
+
+      el.innerHTML = `
+        <div class="stats-grid">
+          <div class="stat-card" style="grid-column: span 2">
+            <div class="stat-label">Add New API Key</div>
+            <div class="form-row" style="margin-top:12px">
+              <div class="form-group">
+                <label>Provider</label>
+                <select id="ak-provider">
+                  <option value="anthropic">Anthropic (Claude)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="ollama">Ollama (Local)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Key Name</label>
+                <input type="text" id="ak-name" placeholder="default" value="default">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>API Key <span id="ak-key-hint" style="font-weight:normal;color:var(--dim)">(sk-...)</span></label>
+                <input type="password" id="ak-key" placeholder="sk-...">
+              </div>
+              <div class="form-group">
+                <label>Model (optional)</label>
+                <input type="text" id="ak-model" placeholder="claude-3-5-haiku-20241022">
+              </div>
+            </div>
+            <button class="btn btn-primary btn-sm" id="btn-add-key">Add Key</button>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:16px">
+          <div class="table-header"><h2>Stored API Keys (${keys.length})</h2></div>
+          <table>
+            <thead><tr><th>Provider</th><th>Name</th><th>Key</th><th>Model</th><th>Active</th><th>Usage</th><th>Last Used</th><th></th></tr></thead>
+            <tbody>
+              ${keys.map(k => `
+                <tr>
+                  <td><span class="badge badge-blue">${k.provider}</span></td>
+                  <td>${k.key_name}</td>
+                  <td><code>${k.key_preview}</code></td>
+                  <td>${k.model || '-'}</td>
+                  <td><span class="badge ${k.is_active ? 'badge-green' : 'badge-red'}">${k.is_active ? 'Active' : 'Inactive'}</span></td>
+                  <td>${k.usage_count}</td>
+                  <td style="font-size:12px">${k.last_used_at || 'Never'}</td>
+                  <td>
+                    <button class="btn btn-outline btn-sm btn-toggle-key" data-id="${k.id}" data-active="${k.is_active}">${k.is_active ? 'Disable' : 'Enable'}</button>
+                    <button class="btn btn-danger btn-sm btn-del-key" data-id="${k.id}">Delete</button>
+                  </td>
+                </tr>
+              `).join('')}
+              ${keys.length === 0 ? '<tr><td colspan="8" style="text-align:center;color:var(--dim)">No API keys configured</td></tr>' : ''}
+            </tbody>
+          </table>
+        </div>
+        <p style="font-size:12px;color:var(--dim);margin-top:12px">API keys stored in the database are used by the recipe generator. You can also set ANTHROPIC_API_KEY as an environment variable.</p>
+      `;
+
+      // Update hints when provider changes
+      document.getElementById('ak-provider').onchange = () => {
+        const prov = document.getElementById('ak-provider').value;
+        const keyInput = document.getElementById('ak-key');
+        const keyHint = document.getElementById('ak-key-hint');
+        const modelInput = document.getElementById('ak-model');
+        if (prov === 'ollama') {
+          keyInput.placeholder = 'http://localhost:11434';
+          keyHint.textContent = '(Ollama URL)';
+          modelInput.placeholder = 'llama3.1';
+        } else if (prov === 'openai') {
+          keyInput.placeholder = 'sk-...';
+          keyHint.textContent = '(sk-...)';
+          modelInput.placeholder = 'gpt-4o-mini';
+        } else {
+          keyInput.placeholder = 'sk-ant-...';
+          keyHint.textContent = '(sk-ant-...)';
+          modelInput.placeholder = 'claude-3-5-haiku-20241022';
+        }
+      };
+
+      document.getElementById('btn-add-key').onclick = async () => {
+        const provider = document.getElementById('ak-provider').value;
+        const keyVal = document.getElementById('ak-key').value.trim();
+        if (!keyVal) { toast(provider === 'ollama' ? 'Ollama URL required' : 'API key required', true); return; }
+        try {
+          await api('/api-keys', {
+            method: 'POST',
+            body: JSON.stringify({
+              provider,
+              key_name: document.getElementById('ak-name').value.trim() || 'default',
+              api_key: keyVal,
+              model: document.getElementById('ak-model').value.trim()
+            })
+          });
+          toast('API key added');
+          renderApiKeys(el);
+        } catch (e) { toast(e.message, true); }
+      };
+
+      el.querySelectorAll('.btn-toggle-key').forEach(btn => {
+        btn.onclick = async () => {
+          const isActive = btn.dataset.active === '1';
+          await api(`/api-keys/${btn.dataset.id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ is_active: !isActive })
+          });
+          toast(isActive ? 'Key disabled' : 'Key enabled');
+          renderApiKeys(el);
+        };
+      });
+
+      el.querySelectorAll('.btn-del-key').forEach(btn => {
+        btn.onclick = async () => {
+          if (!confirm('Delete this API key?')) return;
+          await api(`/api-keys/${btn.dataset.id}`, { method: 'DELETE' });
+          toast('Key deleted');
+          renderApiKeys(el);
+        };
+      });
+    }
+
+    // Generate
+    let genTimer = null;
+    async function renderGenerate(el) {
+      clearInterval(genTimer);
+      let jobsHtml = '';
+      let hasRunning = false;
+      try {
+        const jobs = await api('/generate/status');
+        if (Array.isArray(jobs) && jobs.length > 0) {
+          hasRunning = jobs.some(j => j.status === 'running');
+          jobsHtml = `
+            <div class="table-wrap" style="margin-bottom:24px">
+              <div class="table-header">
+                <h2>Generation Jobs</h2>
+                <button class="btn btn-outline btn-sm" id="btn-refresh-gen">Refresh</button>
+              </div>
+              <table>
+                <thead><tr><th>Batch ID</th><th>Status</th><th>Planned</th><th>Completed</th><th>Failed</th><th>Progress</th><th>Created</th></tr></thead>
+                <tbody>${jobs.map(j => {
+                  const pct = j.total_planned > 0 ? Math.round((j.completed / j.total_planned) * 100) : 0;
+                  return `
+                  <tr>
+                    <td><code>${j.batch_id}</code></td>
+                    <td><span class="badge ${j.status === 'completed' ? 'badge-green' : j.status === 'running' ? 'badge-yellow' : j.status === 'completed_with_errors' ? 'badge-yellow' : 'badge-red'}">${j.status}</span></td>
+                    <td>${j.total_planned}</td>
+                    <td>${j.completed}</td>
+                    <td>${j.failed}</td>
+                    <td style="min-width:120px">
+                      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+                      <span style="font-size:11px;color:var(--dim)">${pct}%</span>
+                    </td>
+                    <td style="font-size:12px">${j.created_at}</td>
+                  </tr>
+                `;}).join('')}</tbody>
+              </table>
+            </div>
+          `;
+        }
+      } catch {}
+
+      el.innerHTML = `
+        ${jobsHtml}
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">Start New Generation</div>
+            <p style="font-size:13px;color:var(--dim);margin:12px 0">Generate recipes using an LLM. Each API call produces multiple recipes.</p>
+            <div class="form-row" style="margin-bottom:12px">
+              <div class="form-group">
+                <label>Provider</label>
+                <select id="gen-provider">
+                  <option value="anthropic">Anthropic (Claude)</option>
+                  <option value="ollama">Ollama (Local)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Model</label>
+                <select id="gen-model">
+                  <option value="">Default (from API key config)</option>
+                  <option value="claude-3-5-haiku-20241022">Claude Haiku 4.5</option>
+                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                  <option value="claude-opus-4-6">Claude Opus 4.6</option>
+                </select>
+                <input type="text" id="gen-model-custom" placeholder="Or type custom model name..." style="margin-top:4px">
+              </div>
+            </div>
+            <div class="form-row" style="margin-bottom:12px">
+              <div class="form-group">
+                <label>Recipes per API call</label>
+                <input type="number" id="gen-batch-size" value="5" min="1" max="20">
+              </div>
+              <div class="form-group">
+                <label>Max prompt combos (blank = all ~5000+)</label>
+                <input type="number" id="gen-max-items" placeholder="e.g. 10 for testing">
+              </div>
+            </div>
+            <button class="btn btn-primary" id="btn-start-gen">Start Generation</button>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Maintenance</div>
+            <p style="font-size:13px;color:var(--dim);margin:12px 0">Re-run the tag engine on all existing recipes to update tags.</p>
+            <button class="btn btn-outline" id="btn-retag">Re-tag All Recipes</button>
+          </div>
+        </div>
+      `;
+
+      if (document.getElementById('btn-refresh-gen')) {
+        document.getElementById('btn-refresh-gen').onclick = () => renderGenerate(el);
+      }
+      // Auto-refresh every 5s if a job is running
+      if (hasRunning) {
+        genTimer = setInterval(() => {
+          if (currentTab === 'generate') renderGenerate(el);
+          else clearInterval(genTimer);
+        }, 5000);
+      }
+
+      // Switch model options when provider changes
+      document.getElementById('gen-provider').onchange = () => {
+        const prov = document.getElementById('gen-provider').value;
+        const modelSelect = document.getElementById('gen-model');
+        const customInput = document.getElementById('gen-model-custom');
+        if (prov === 'ollama') {
+          modelSelect.innerHTML = `
+            <option value="">Default (from config)</option>
+            <option value="llama3.1">Llama 3.1</option>
+            <option value="llama3.2">Llama 3.2</option>
+            <option value="mistral">Mistral</option>
+            <option value="mixtral">Mixtral</option>
+            <option value="qwen2.5">Qwen 2.5</option>
+            <option value="gemma2">Gemma 2</option>
+            <option value="deepseek-r1">DeepSeek R1</option>
+            <option value="phi3">Phi-3</option>
+          `;
+          customInput.placeholder = 'Or type Ollama model name...';
+        } else {
+          modelSelect.innerHTML = `
+            <option value="">Default (from API key config)</option>
+            <option value="claude-3-5-haiku-20241022">Claude Haiku 4.5</option>
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+            <option value="claude-opus-4-6">Claude Opus 4.6</option>
+          `;
+          customInput.placeholder = 'Or type custom model name...';
+        }
+      };
+
+      document.getElementById('btn-start-gen').onclick = async () => {
+        const batchSize = +document.getElementById('gen-batch-size').value || 10;
+        const maxItems = document.getElementById('gen-max-items').value ? +document.getElementById('gen-max-items').value : null;
+        const provider = document.getElementById('gen-provider').value;
+        const modelSelect = document.getElementById('gen-model').value;
+        const modelCustom = document.getElementById('gen-model-custom').value.trim();
+        const model = modelCustom || modelSelect || null;
+
+        const providerLabel = provider === 'ollama' ? 'Ollama' : 'Claude';
+        const modelLabel = model || 'default';
+        if (!confirm(`Start generating recipes?\nProvider: ${providerLabel}\nModel: ${modelLabel}\nBatch size: ${batchSize}\nMax combos: ${maxItems || 'all'}`)) return;
+
+        try {
+          const result = await api('/generate/start', {
+            method: 'POST',
+            body: JSON.stringify({ batch_size: batchSize, max_items: maxItems, provider, model })
+          });
+          toast(`Generation started: ${result.batch_id} (${providerLabel})`);
+          setTimeout(() => renderGenerate(el), 2000);
+        } catch (e) { toast(e.message, true); }
+      };
+
+      document.getElementById('btn-retag').onclick = async () => {
+        if (!confirm('Re-tag all recipes? This may take a moment.')) return;
+        try {
+          const result = await api('/retag', { method: 'POST' });
+          toast(result.message);
+        } catch (e) { toast(e.message, true); }
+      };
+    }
+
+    // LLM Savings
+    async function renderSavings(el) {
+      const data = await api('/llm-savings');
+      const pct = data.savings_pct || 0;
+      const barColor = pct > 70 ? 'var(--green)' : pct > 30 ? 'var(--yellow)' : 'var(--red)';
+
+      el.innerHTML = `
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">DB Cache Hit Rate</div>
+            <div class="stat-value" style="color:${barColor}">${pct}%</div>
+            <div class="progress-bar" style="margin-top:8px;height:8px;background:var(--surface2);border-radius:4px">
+              <div style="width:${pct}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.3s"></div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Served from DB (Free)</div>
+            <div class="stat-value green">${data.db_served || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">LLM API Calls (Paid)</div>
+            <div class="stat-value" style="color:var(--red)">${data.llm_calls || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Auto-Cached Recipes</div>
+            <div class="stat-value blue">${data.cached_recipes || 0}</div>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:24px">
+          <div class="table-header">
+            <h2>Breakdown by Endpoint</h2>
+            <button class="btn btn-outline btn-sm" onclick="renderTab('savings')">Refresh</button>
+          </div>
+          <table>
+            <thead><tr><th>Endpoint</th><th>Source</th><th>Requests</th><th>Recipes</th></tr></thead>
+            <tbody>
+              ${(data.breakdown || []).map(r => `
+                <tr>
+                  <td><code>${r.endpoint}</code></td>
+                  <td><span class="badge ${r.served_from === 'llm' ? 'badge-red' : r.served_from === 'db_cache' ? 'badge-blue' : 'badge-green'}">${r.served_from}</span></td>
+                  <td>${r.requests}</td>
+                  <td>${r.recipes || 0}</td>
+                </tr>
+              `).join('')}
+              ${(data.breakdown || []).length === 0 ? '<tr><td colspan="4" style="text-align:center;color:var(--dim)">No requests logged yet</td></tr>' : ''}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="stat-card" style="margin-top:24px">
+          <div class="stat-label">How It Works</div>
+          <p style="font-size:13px;color:var(--dim);margin-top:8px;line-height:1.5">
+            Every LLM-generated recipe is automatically saved to the database. When a similar request comes in,
+            the system serves it from the DB cache instead of making a paid API call.
+            The more the app is used, the higher the cache hit rate becomes, reducing API costs over time.
+          </p>
+          <div style="margin-top:12px;display:flex;gap:12px">
+            <div style="flex:1;padding:8px 12px;border-radius:8px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2)">
+              <div style="font-size:11px;color:var(--green);font-weight:600">DB / DB CACHE</div>
+              <div style="font-size:12px;color:var(--dim);margin-top:2px">Free - served from local database</div>
+            </div>
+            <div style="flex:1;padding:8px 12px;border-radius:8px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2)">
+              <div style="font-size:11px;color:var(--red);font-weight:600">LLM</div>
+              <div style="font-size:12px;color:var(--dim);margin-top:2px">Paid API call - result cached for next time</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Init
+    if (token) {
+      showApp();
+    }
+  </script>
+</body>
+</html>

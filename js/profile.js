@@ -243,6 +243,16 @@ const Profile = {
       </div>
 
       <button class="btn btn-full" id="btn-save-profile" style="margin-top:8px">Save Profile</button>
+
+      ${Auth.isLoggedIn() ? `
+        <div class="form-section" style="margin-top:16px">
+          <div class="form-section-title">Account</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <span style="color:var(--text-dim);font-size:13px">${Auth.getUser()?.email || ''}</span>
+            <button class="btn btn-outline" id="btn-logout" style="font-size:12px;padding:6px 14px">Sign Out</button>
+          </div>
+        </div>
+      ` : ''}
     `;
 
     this._bindProfileEvents();
@@ -316,6 +326,15 @@ const Profile = {
       Store.saveProfile({ ...profile, tdee, macros });
       UI.toast('Profile saved!', 'success');
       App.refreshDashboard();
+      // Sync to server
+      Auth.syncProfile();
+      Auth.syncData();
+    });
+
+    UI.$('#btn-logout')?.addEventListener('click', async () => {
+      if (!confirm('Sign out of your account?')) return;
+      await Auth.logout();
+      location.reload();
     });
 
     UI.$('#btn-export')?.addEventListener('click', () => Store.exportData());
@@ -516,10 +535,8 @@ const Profile = {
       const w = parseFloat(UI.$('#ob-weight').value);
       const h = parseFloat(UI.$('#ob-height').value);
       const a = parseInt(UI.$('#ob-age').value);
-      const key = UI.$('#ob-apikey').value.trim();
 
       if (!w || !h || !a) { UI.toast('Fill in weight, height & age', 'error'); return; }
-      if (!key) { UI.toast('API key is required', 'error'); return; }
 
       const profile = {
         weight: w, height: h, age: a,
@@ -536,8 +553,11 @@ const Profile = {
       profile.macros = Profile.calculateMacros(profile);
       Store.saveProfile(profile);
 
+      // Sync to server
+      Auth.syncProfile();
+
       UI.hide(overlay);
-      App.refreshDashboard();
+      App.navigate('dashboard');
     });
   }
 };

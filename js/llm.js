@@ -1,4 +1,188 @@
 const LLM = {
+  // Backend API base URL (empty = same origin)
+  backendUrl: '',
+  _backendAvailable: null,
+
+  // Check if the backend server is running
+  async checkBackend() {
+    if (this._backendAvailable !== null) return this._backendAvailable;
+    try {
+      const res = await fetch(`${this.backendUrl}/api/health`, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        const data = await res.json();
+        this._backendAvailable = data.status === 'ok';
+        return this._backendAvailable;
+      }
+    } catch {}
+    this._backendAvailable = false;
+    return false;
+  },
+
+  // Try to fetch suggestions from the backend recipe database first
+  async _tryBackendSuggest(mealTypes, dietFilters, customRequest) {
+    try {
+      const profile = Store.getProfile();
+      const todayTotals = Store.getTodayTotals();
+      const remaining = {
+        calories: Math.max(0, profile.macros.calories - todayTotals.calories),
+        protein: Math.max(0, profile.macros.protein - todayTotals.protein),
+        carbs: Math.max(0, profile.macros.carbs - todayTotals.carbs),
+        fat: Math.max(0, profile.macros.fat - todayTotals.fat)
+      };
+      const prefs = Store.getPreferences();
+
+      // Gather recent meal history (last 3 days) — single pass for names, cuisines, proteins
+      const recentMealNames = [];
+      const recentCuisines = [];
+      const recentProteinSources = [];
+      const data = Store.load();
+      const todayKey = Store.getTodayKey();
+      for (let i = 0; i <= 3; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const key = d.toISOString().split('T')[0];
+        const dayMeals = data.logs[key]?.meals || [];
+        dayMeals.forEach(m => {
+          const name = m.description || m.items?.map(it => it.name).join(', ');
+          if (name) recentMealNames.push(name.toLowerCase());
+          if (m.cuisine) recentCuisines.push(m.cuisine.toLowerCase());
+          if (m.protein_source) recentProteinSources.push(m.protein_source.toLowerCase());
+        });
+      }
+
+      // Count meals already eaten today to compute adaptive fraction
+      const todayMeals = data.logs[todayKey]?.meals || [];
+      const mealsEatenToday = todayMeals.length;
+
+      // Workout data with timestamps for pre/post-workout targeting
+      const todayWorkoutCals = Store.getTodayWorkoutCalories();
+      const todayWorkouts = Store.getTodayWorkouts();
+      const now = Date.now();
+      const hasRecentWorkout = todayWorkouts.some(w => {
+        const wTime = new Date(w.time);
+        return (now - wTime.getTime()) < 3 * 60 * 60 * 1000;
+      });
+      // Detect if there's an upcoming workout (within next 2h) based on patterns
+      const hasUpcomingWorkout = todayWorkouts.length === 0 && Store.getTodayWorkoutCalories() === 0;
+      // Check yesterday's workout for recovery day detection
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayKey = yesterday.toISOString().split('T')[0];
+      const yesterdayWorkouts = Store.getDayWorkouts ? Store.getDayWorkouts(yesterdayKey) : [];
+      const isRecoveryDay = yesterdayWorkouts.length > 0 && todayWorkouts.length === 0;
+
+      // Body trend for plateau detection — use more data points
+      const bodyLog = Store.getBodyLog();
+      let weightTrend = 'stable';
+      let weightChangeRate = 0;
+      if (bodyLog.length >= 3) {
+        const recent = bodyLog.slice(-5);
+        const first = recent[0].weight;
+        const last = recent[recent.length - 1].weight;
+        const diff = last - first;
+        const days = Math.max(1, (new Date(recent[recent.length - 1].date) - new Date(recent[0].date)) / 86400000);
+        weightChangeRate = (diff / days) * 7; // kg per week
+        if (Math.abs(diff) < 0.3 && recent.length >= 3) weightTrend = 'plateau';
+        else if (diff > 0) weightTrend = 'gaining';
+        else weightTrend = 'losing';
+      }
+
+      // Weekly macro averages for trajectory correction
+      const weekAvg = Store.getWeekAverage();
+      const weeklyMacroTrend = {};
+      if (weekAvg && weekAvg.days >= 3) {
+        weeklyMacroTrend.avg_calories = weekAvg.calories;
+        weeklyMacroTrend.avg_protein = weekAvg.protein;
+        weeklyMacroTrend.avg_carbs = weekAvg.carbs;
+        weeklyMacroTrend.avg_fat = weekAvg.fat;
+        weeklyMacroTrend.days_tracked = weekAvg.days;
+        weeklyMacroTrend.target_calories = profile.macros.calories;
+        weeklyMacroTrend.target_protein = profile.macros.protein;
+        weeklyMacroTrend.target_carbs = profile.macros.carbs;
+        weeklyMacroTrend.target_fat = profile.macros.fat;
+      }
+
+      // Hydration data
+      const todayWater = Store.getWater ? Store.getWater(Store.getTodayKey()) : 0;
+      const waterTarget = (profile.weight || 70) * 33; // ml per day
+
+      // User experience level (days with logged meals)
+      const allDays = Store.getAllDays();
+      const daysWithLogs = allDays.length;
+
+      // Fiber and sugar tracking
+      const remainingFull = {
+        ...remaining,
+        fiber: Math.max(0, 25 - (todayTotals.fiber || 0)),
+        sugar_processed: todayTotals.sugar_processed || 0,
+        sugar_natural: todayTotals.sugar_natural || 0
+      };
+
+      // Time since last meal (hunger signal)
+      let minutesSinceLastMeal = null;
+      if (todayMeals.length > 0) {
+        const lastMeal = todayMeals[todayMeals.length - 1];
+        if (lastMeal.time) {
+          minutesSinceLastMeal = Math.round((now - new Date(lastMeal.time).getTime()) / 60000);
+        }
+      }
+
+      const res = await fetch(`${this.backendUrl}/api/recipes/suggest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meal_types: Array.isArray(mealTypes) ? mealTypes : [mealTypes],
+          diet_filters: dietFilters || [],
+          goal: profile.goal || '',
+          remaining: remainingFull,
+          liked: prefs.liked || [],
+          disliked: prefs.disliked || [],
+          hour_of_day: new Date().getHours(),
+          day_of_week: new Date().getDay(),
+          recent_meal_names: recentMealNames,
+          recent_cuisines: recentCuisines,
+          recent_protein_sources: recentProteinSources,
+          meals_eaten_today: mealsEatenToday,
+          health_conditions: profile.healthConditions || [],
+          activity_level: profile.activityLevel || 'moderate',
+          gender: profile.gender || '',
+          age: profile.age || 0,
+          pantry: Store.getPantry(),
+          workout_calories_today: todayWorkoutCals,
+          has_recent_workout: hasRecentWorkout,
+          is_recovery_day: isRecoveryDay,
+          weight_trend: weightTrend,
+          weight_change_rate: weightChangeRate,
+          weekly_macro_trend: weeklyMacroTrend,
+          water_ml: todayWater,
+          water_target_ml: waterTarget,
+          days_with_logs: daysWithLogs,
+          minutes_since_last_meal: minutesSinceLastMeal
+        })
+      });
+
+      if (!res.ok) return null;
+      const result = await res.json();
+      if (result.suggestions && result.suggestions.length > 0) {
+        return result;
+      }
+    } catch {
+      // Backend not available, fall through to LLM
+    }
+    return null;
+  },
+
+  // Fetch a full recipe from the backend database by ID
+  async _fetchBackendRecipe(recipeId) {
+    try {
+      const res = await fetch(`${this.backendUrl}/api/recipes/${recipeId}`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  },
+
   async call(messages, profile, maxTokens = 1500) {
     if (profile.apiProvider === 'anthropic') {
       return this._callClaude(messages, profile.apiKey, profile.claudeModel, maxTokens);
@@ -46,6 +230,7 @@ const LLM = {
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
+        model: 'claude-3-5-haiku-20241022',
         model: claudeModel || 'claude-haiku-4-5-20251001',
         max_tokens: maxTokens,
         system: systemMsg,
@@ -97,6 +282,7 @@ Rules:
           'anthropic-dangerous-direct-browser-access': 'true'
         },
         body: JSON.stringify({
+          model: 'claude-3-5-haiku-20241022',
           model: profile?.claudeModel || 'claude-haiku-4-5-20251001',
           max_tokens: 1500,
           system: systemPrompt,
@@ -216,247 +402,103 @@ Rules:
   },
 
   async getCoachSuggestion(mealTypes, dietFilters = [], customRequest = '') {
-    const profile = Store.getProfile();
-    if (!profile.apiKey) throw new Error('Please set your API key in Settings');
-
-    const todayTotals = Store.getTodayTotals();
-    const todayMeals = Store.getTodayMeals();
-    const weekAvg = Store.getWeekAverage();
-    const prefs = Store.getPreferences();
-    const remaining = {
-      calories: Math.max(0, profile.macros.calories - todayTotals.calories),
-      protein: Math.max(0, profile.macros.protein - todayTotals.protein),
-      carbs: Math.max(0, profile.macros.carbs - todayTotals.carbs),
-      fat: Math.max(0, profile.macros.fat - todayTotals.fat)
-    };
-
-    const mealTypeLabels = {
-      breakfast: 'breakfast',
-      lunch: 'lunch',
-      snack: 'snack',
-      dinner: 'dinner',
-      pre_workout: 'pre-workout meal',
-      post_workout: 'post-workout meal'
-    };
-    // Support both single string and array
-    const types = Array.isArray(mealTypes) ? mealTypes : [mealTypes];
-    const mealLabel = types.map(t => mealTypeLabels[t] || t).join(' + ');
-
-    const goalDescriptions = {
-      fat_loss: 'losing fat while preserving muscle. Prioritize protein and satiety.',
-      aggressive_fat_loss: 'aggressive fat loss. Very high protein, low-calorie dense foods.',
-      muscle_gain: 'building muscle. Ensure adequate protein and caloric surplus.',
-      lean_bulk: 'lean bulking. Clean calorie surplus with high protein.',
-      maintain: 'maintaining current weight. Balanced nutrition.',
-      recomp: 'body recomposition. High protein, slight deficit, nutrient timing matters.'
-    };
-
-    const mealsLog = todayMeals.map(m => m.description || m.items?.map(i => i.name).join(', ')).join('; ');
-
-    // Build recent history (last 3 days, excluding today) for variety
-    const recentHistory = [];
-    for (let i = 1; i <= 3; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().split('T')[0];
-      const dayMeals = Store.getDayMeals(key);
-      if (dayMeals.length > 0) {
-        const foods = dayMeals.map(m => m.description || m.items?.map(it => it.name).join(', ')).join('; ');
-        recentHistory.push(`${key}: ${foods}`);
-      }
+    // Try DB-based suggestions first
+    const backendResult = await this._tryBackendSuggest(mealTypes, dietFilters, customRequest);
+    if (backendResult && backendResult.suggestions && backendResult.suggestions.length > 0) {
+      return backendResult;
     }
 
-    let prefsText = '';
-    if (prefs.liked.length > 0) {
-      prefsText += `\nFoods the client LIKES (prefer these or similar): ${prefs.liked.join(', ')}`;
-    }
-    if (prefs.disliked.length > 0) {
-      prefsText += `\nFoods the client DISLIKES (NEVER suggest these or very similar dishes): ${prefs.disliked.join(', ')}`;
-    }
+    // Fallback: generate suggestions via LLM
+    const llmResult = await this._tryLLMSuggest(mealTypes, dietFilters, customRequest);
+    if (llmResult) return llmResult;
 
-    const dietFilterLabels = {
-      vegan: 'Vegan (no animal products)',
-      vegetarian: 'Vegetarian (no meat/fish)',
-      keto: 'Keto (very low carb, high fat)',
-      low_carb: 'Low Carb',
-      high_protein: 'High Protein focus',
-      paleo: 'Paleo (no grains, dairy, legumes)',
-      gluten_free: 'Gluten Free',
-      dairy_free: 'Dairy Free',
-      mediterranean: 'Mediterranean diet style',
-      whole30: 'Whole30 compliant'
-    };
+    throw new Error('No recipes available. Add your Anthropic API key in the admin panel.');
+  },
 
-    let dietText = '';
-    const filters = Array.isArray(dietFilters) ? dietFilters : [];
-    if (filters.length > 0) {
-      dietText = `\nDietary requirements (MUST follow): ${filters.map(f => dietFilterLabels[f] || f).join(', ')}`;
-    }
-
-    let customText = '';
-    if (customRequest) {
-      customText = `\nAdditional client request: ${customRequest}`;
-    }
-
-    const healthLabels = {
-      diabetes_t2: 'Type 2 Diabetes (low glycemic, limit sugar/refined carbs, steady blood sugar)',
-      diabetes_t1: 'Type 1 Diabetes (consistent carb portions, low glycemic)',
-      prediabetes: 'Prediabetes (reduce sugar, favor complex carbs, high fiber)',
-      insulin_resistance: 'Insulin Resistance (low glycemic, minimize refined carbs/sugar, high fiber)',
-      high_cholesterol: 'High Cholesterol (limit saturated fat, no trans fat, favor omega-3, high fiber)',
-      high_triglycerides: 'High Triglycerides (limit sugar/alcohol/refined carbs, omega-3 rich)',
-      high_blood_pressure: 'High Blood Pressure (low sodium <1500mg/day, DASH diet principles, potassium-rich foods)',
-      heart_disease: 'Heart Disease (heart-healthy fats, low sodium, high fiber, omega-3)',
-      pcos: 'PCOS (anti-inflammatory, low glycemic, balanced insulin response)',
-      hypothyroid: 'Hypothyroidism (selenium, zinc, avoid excess soy/cruciferous raw, iodine-aware)',
-      hyperthyroid: 'Hyperthyroidism (calcium-rich, calorie-dense, avoid excess iodine)',
-      hashimoto: "Hashimoto's (anti-inflammatory, gluten-aware, selenium-rich, avoid excess iodine)",
-      ibs: 'IBS (low FODMAP friendly, easy to digest, avoid common triggers)',
-      ibd_crohn: "Crohn's Disease (low residue during flares, easy to digest, avoid high fiber raw foods during flares)",
-      ibd_colitis: 'Ulcerative Colitis (low residue during flares, avoid dairy if trigger, cooked vegetables preferred)',
-      celiac: 'Celiac Disease (strictly gluten-free, no wheat/barley/rye)',
-      kidney_disease: 'Kidney Disease (limit sodium, potassium, phosphorus; moderate protein)',
-      gout: 'Gout (low purine, limit red meat/organ meats/shellfish, hydration focus)',
-      anemia: 'Iron Deficiency Anemia (iron-rich foods, vitamin C for absorption, avoid calcium with iron meals)',
-      b12_deficiency: 'B12 Deficiency (B12-rich foods: meat, fish, eggs, fortified foods)',
-      osteoporosis: 'Osteoporosis (calcium-rich, vitamin D, magnesium, limit caffeine/sodium)',
-      lactose_intolerant: 'Lactose Intolerant (dairy-free or lactose-free alternatives)',
-      fatty_liver: 'Fatty Liver (no alcohol, low sugar/fructose, high fiber, healthy fats)',
-      acid_reflux: 'Acid Reflux/GERD (avoid spicy, citrus, tomato, caffeine, fatty fried foods; smaller portions)',
-      gallbladder: 'Gallbladder Issues (low fat meals, avoid fried/greasy foods, small frequent meals)',
-      food_allergies: 'Food Allergies (carefully avoid all allergens, check ingredients)',
-      nut_allergy: 'Nut Allergy (strictly no tree nuts or peanuts in any form)',
-      shellfish_allergy: 'Shellfish Allergy (no shrimp, crab, lobster, mussels, clams)',
-      egg_allergy: 'Egg Allergy (no eggs or egg-containing ingredients)',
-      soy_allergy: 'Soy Allergy (no soy, tofu, tempeh, soy sauce, edamame)',
-      arthritis: 'Arthritis (anti-inflammatory: omega-3, turmeric, avoid excess sugar/processed foods)',
-      fibromyalgia: 'Fibromyalgia (anti-inflammatory, magnesium-rich, avoid artificial sweeteners/MSG)',
-      endometriosis: 'Endometriosis (anti-inflammatory, omega-3, limit red meat/dairy, favor vegetables)',
-      sleep_apnea: 'Sleep Apnea (weight management focus, anti-inflammatory, avoid heavy late meals)',
-      anxiety_depression: 'Anxiety/Depression (omega-3, magnesium, B vitamins, gut-friendly, limit caffeine/sugar)',
-      migraine: 'Migraines (avoid triggers: aged cheese, alcohol, MSG, nitrates; magnesium-rich)',
-      autoimmune: 'Autoimmune Disorder (anti-inflammatory, consider AIP protocol, avoid processed foods)',
-    };
-
-    let healthText = '';
-    const conditions = profile.healthConditions || [];
-    if (conditions.length > 0) {
-      healthText = `\nHEALTH CONDITIONS (CRITICAL - meals MUST be safe and beneficial for these):\n${conditions.map(c => '- ' + (healthLabels[c] || c + ' (tailor diet to be safe and beneficial for this condition)')).join('\n')}`;
-    }
-
-    const messages = [
-      {
-        role: 'system',
-        content: `You are an elite fitness nutrition coach. Your client has specific goals, macro targets, dietary needs, and food preferences you MUST respect.
-Reply with ONLY valid JSON in this exact format:
-{
-  "top_pick_reason": "2-3 sentence explanation of why option #1 is the BEST choice for this client right now, referencing their specific remaining macros, goal, and recent meals",
-  "suggestions": [
-    {
-      "rank": 1,
-      "name": "Meal name",
-      "description": "Brief description with portions",
-      "why": "One sentence on why this ranks here",
-      "calories": 0, "protein": 0, "carbs": 0, "fat": 0
-    }
-  ]
-}
-Rules:
-- Suggest exactly 5 options covering: ${mealLabel}
-- RANK them 1-5 by how well they fit the client's current needs (remaining macros, goal, variety, preferences)
-- #1 = best pick right now. Include a clear "why" for each option explaining its ranking
-- The top_pick_reason should be personal and specific: reference actual numbers (e.g. "You still need 45g protein and only have 300cal left, so this lean option is ideal")
-- Each suggestion should help hit remaining macro targets
-- STRICTLY follow any dietary requirements (vegan, keto, etc.) - never violate them
-- NEVER suggest foods the client has marked as disliked or very similar alternatives
-- Favor foods similar to what the client has liked in the past
-- Be specific with portions (e.g., "200g chicken breast" not just "chicken")
-- Prioritize whole foods and practical meals
-- Consider the client's gender and age for nutritional needs (e.g., iron for women, calcium considerations, age-appropriate portions)
-- AVOID repeating meals the client ate in the last few days - suggest VARIETY
-- If the client had fish recently, suggest other protein sources. Same for any repeated food.
-- Tailor suggestions to the selected meal types: ${mealLabel}
-- If multiple meal types are selected, distribute options across types
-- If the client has health conditions, EVERY suggestion MUST be safe and beneficial for those conditions. This is non-negotiable.
-- For diabetes: favor low glycemic foods. For high cholesterol: limit saturated fat. For high BP: keep sodium very low. Etc.
-- Honor any additional custom instructions from the client`
-      },
-      {
-        role: 'user',
-        content: `Client profile:
-- Gender: ${profile.gender}, Age: ${profile.age}
-- Goal: ${goalDescriptions[profile.goal] || 'general fitness'}
-- Weight: ${profile.weight}${profile.unit === 'metric' ? 'kg' : 'lbs'}, Height: ${profile.height}${profile.unit === 'metric' ? 'cm' : 'in'}
-- Daily targets: ${profile.macros.calories}cal / ${profile.macros.protein}g protein / ${profile.macros.carbs}g carbs / ${profile.macros.fat}g fat
-
-Today so far:
-- Eaten: ${todayTotals.calories}cal / ${todayTotals.protein}g P / ${todayTotals.carbs}g C / ${todayTotals.fat}g F
-- Remaining: ${remaining.calories}cal / ${remaining.protein}g P / ${remaining.carbs}g C / ${remaining.fat}g F
-- Meals eaten today: ${mealsLog || 'Nothing yet'}
-${weekAvg ? `- 7-day average: ${weekAvg.calories}cal / ${weekAvg.protein}g P / ${weekAvg.carbs}g C / ${weekAvg.fat}g F` : ''}
-${recentHistory.length > 0 ? `\nRecent meals (DO NOT repeat these - suggest variety):\n${recentHistory.join('\n')}` : ''}
-${prefsText}${dietText}${healthText}${customText}
-
-Suggest the best ${mealLabel} options to help hit remaining targets. Ensure variety from recent meals, respect all dietary requirements, health conditions, and preferences.`
-      }
-    ];
-
-    const response = await this.call(messages, profile);
-    const cleaned = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
+  async _tryLLMSuggest(mealTypes, dietFilters, customRequest) {
     try {
-      return JSON.parse(cleaned);
+      const profile = Store.getProfile();
+      const todayTotals = Store.getTodayTotals();
+      const remaining = {
+        calories: Math.max(0, profile.macros.calories - todayTotals.calories),
+        protein: Math.max(0, profile.macros.protein - todayTotals.protein),
+        carbs: Math.max(0, profile.macros.carbs - todayTotals.carbs),
+        fat: Math.max(0, profile.macros.fat - todayTotals.fat)
+      };
+      const prefs = Store.getPreferences();
+
+      const res = await fetch(`${this.backendUrl}/api/recipes/suggest-llm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meal_types: Array.isArray(mealTypes) ? mealTypes : [mealTypes],
+          diet_filters: dietFilters || [],
+          goal: profile.goal || '',
+          remaining,
+          liked: prefs.liked || [],
+          disliked: prefs.disliked || [],
+          hour_of_day: new Date().getHours()
+        })
+      });
+
+      if (!res.ok) return null;
+      const result = await res.json();
+      if (result.suggestions && result.suggestions.length > 0) {
+        return result;
+      }
     } catch {
-      throw new Error('Failed to get suggestions. Please try again.');
+      // LLM endpoint not available
     }
+    return null;
   },
 
   async generateRecipe(suggestion, dietFilters = []) {
-    const profile = Store.getProfile();
-    if (!profile.apiKey) throw new Error('Please set your API key in Settings');
-
-    const dietText = dietFilters.length > 0
-      ? `\nDietary requirements (MUST follow): ${dietFilters.join(', ')}`
-      : '';
-
-    const messages = [
-      {
-        role: 'system',
-        content: `You are a professional chef and fitness nutrition coach. Generate a detailed recipe.
-Reply with ONLY valid JSON in this exact format:
-{
-  "name": "Recipe name",
-  "prep_time": "10 min",
-  "cook_time": "20 min",
-  "servings": "1",
-  "ingredients": ["200g chicken breast", "1 tbsp olive oil", "..."],
-  "steps": ["Step 1 description", "Step 2 description", "..."],
-  "tips": "Optional coach tip about this meal for fitness goals",
-  "calories": 0, "protein": 0, "carbs": 0, "fat": 0
-}
-Rules:
-- Use exact gram/ml measurements for ingredients
-- Keep steps clear and concise
-- Include all seasonings and cooking details
-- Macros must match the original suggestion closely
-- Respect all dietary restrictions${dietText}`
-      },
-      {
-        role: 'user',
-        content: `Generate a full recipe for: ${suggestion.name}
-Description: ${suggestion.description}
-Target macros: ${suggestion.calories} cal / ${suggestion.protein}g protein / ${suggestion.carbs}g carbs / ${suggestion.fat}g fat`
+    // Try DB first if we have an ID
+    if (suggestion.id) {
+      const dbRecipe = await this._fetchBackendRecipe(suggestion.id);
+      if (dbRecipe) {
+        return {
+          name: dbRecipe.name,
+          prep_time: `${dbRecipe.prep_time_min || 0} min`,
+          cook_time: `${dbRecipe.cook_time_min || 0} min`,
+          servings: String(dbRecipe.servings || 1),
+          ingredients: dbRecipe.ingredients || [],
+          steps: dbRecipe.steps || [],
+          tips: dbRecipe.tips || '',
+          calories: dbRecipe.calories,
+          protein: dbRecipe.protein,
+          carbs: dbRecipe.carbs,
+          fat: dbRecipe.fat
+        };
       }
-    ];
-
-    const response = await this.call(messages, profile, 2000);
-    const cleaned = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-    try {
-      return JSON.parse(cleaned);
-    } catch {
-      throw new Error('Failed to generate recipe. Please try again.');
     }
+
+    // Fallback: generate full recipe via LLM
+    return this._generateRecipeLLM(suggestion, dietFilters);
+  },
+
+  async _generateRecipeLLM(suggestion, dietFilters) {
+    const res = await fetch(`${this.backendUrl}/api/recipes/generate-llm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: suggestion.name,
+        calories: suggestion.calories,
+        protein: suggestion.protein,
+        carbs: suggestion.carbs,
+        fat: suggestion.fat,
+        cuisine: suggestion.cuisine || '',
+        category: suggestion.category || '',
+        diet_filters: dietFilters || []
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to generate recipe. Check your LLM configuration.');
+    }
+
+    return await res.json();
   },
 
   async getGapAdvice() {

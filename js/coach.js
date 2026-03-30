@@ -532,17 +532,12 @@ const Coach = {
 
   async getSuggestion() {
     const profile = Store.getProfile();
-    if (!profile.apiKey) {
-      UI.toast('Set your API key in Profile first', 'error');
-      App.navigate('profile');
-      return;
-    }
     if (this.selectedMealTypes.length === 0) {
       UI.toast('Pick at least one meal type', 'error');
       return;
     }
 
-    UI.showLoading('Your coach is thinking...');
+    UI.showLoading('Finding the best meals for you...');
 
     this.customRequest = UI.$('#coach-custom')?.value.trim() || '';
     const pantry = Store.getPantry();
@@ -573,7 +568,10 @@ const Coach = {
       ${result.reasoning ? `<div class="coach-reasoning">${UI.esc(result.reasoning)}</div>` : ''}
       ${result.suggestions.map((s, i) => `
         <div class="suggestion-card ${i === 0 ? 'top-pick' : ''}" id="suggestion-${i}">
-          <div class="suggestion-rank-badge">${i === 0 ? '#1 Best Pick' : `#${s.rank || i + 1}`}</div>
+          <div class="suggestion-rank-badge">
+            ${i === 0 ? '#1 Best Pick' : `#${s.rank || i + 1}`}
+            <span class="sug-source ${s.source === 'llm' ? 'sug-source-llm' : 'sug-source-db'}">${s.source === 'llm' ? 'LLM' : 'DB'}</span>
+          </div>
           <div class="suggestion-header">
             <div class="suggestion-title">${UI.esc(s.name)}</div>
             <div class="suggestion-actions">
@@ -590,7 +588,7 @@ const Coach = {
             <span style="color:var(--fat-color)">${s.fat}g F</span>
           </div>
           <div class="suggestion-btn-row">
-            <button class="btn btn-recipe" data-index="${i}">View Recipe</button>
+            <button class="btn btn-recipe instant" data-index="${i}">View Recipe</button>
             <button class="btn btn-log-suggestion" data-index="${i}">I ate this</button>
           </div>
           <div class="recipe-content" id="recipe-${i}"></div>
@@ -656,7 +654,7 @@ const Coach = {
         }
 
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Generating...';
+        btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Loading...';
 
         try {
           const recipe = await LLM.generateRecipe(suggestion, this.selectedDietFilters);
@@ -675,45 +673,94 @@ const Coach = {
 
   async generateMealPlan() {
     const profile = Store.getProfile();
-    if (!profile.apiKey) { UI.toast('Set API key first', 'error'); return; }
 
-    UI.showLoading('Generating your weekly plan...');
-    const pantry = Store.getPantry();
-    const prefs = Store.getPreferences();
-    const conditions = profile.healthConditions || [];
+    const dbPlan = await this._tryDbMealPlan(profile);
+    if (dbPlan) {
+      this._renderMealPlan(dbPlan);
+      return;
+    }
 
-    const messages = [
-      { role: 'system', content: `You are an elite nutrition coach. Create a 7-day meal plan.
-Reply with ONLY valid JSON:
-{
-  "plan": [
-    { "day": "Monday", "meals": [
-      {"type": "breakfast", "name": "Meal name", "description": "portions", "calories": 0, "protein": 0, "carbs": 0, "fat": 0},
-      {"type": "lunch", "name": "...", "description": "...", "calories": 0, "protein": 0, "carbs": 0, "fat": 0},
-      {"type": "dinner", "name": "...", "description": "...", "calories": 0, "protein": 0, "carbs": 0, "fat": 0},
-      {"type": "snack", "name": "...", "description": "...", "calories": 0, "protein": 0, "carbs": 0, "fat": 0}
-    ]}
-  ]
-}
-Rules:
-- 7 days (Mon-Sun), 4 meals each (breakfast, lunch, dinner, snack)
-- Each day should hit daily macro targets closely
-- Maximum variety across the week
-- Practical, realistic meals with specific portions
-- Respect all dietary requirements and health conditions
-- Favor liked foods, avoid disliked foods
-${pantry.length > 0 ? `- Prefer using these ingredients: ${pantry.join(', ')}` : ''}
-${conditions.length > 0 ? `- Health conditions: ${conditions.join(', ')}` : ''}
-${prefs.liked.length > 0 ? `- Likes: ${prefs.liked.join(', ')}` : ''}
-${prefs.disliked.length > 0 ? `- Dislikes (AVOID): ${prefs.disliked.join(', ')}` : ''}` },
-      { role: 'user', content: `Create a 7-day meal plan for:
-- ${profile.gender}, ${profile.age}yo, ${profile.weight}${profile.unit === 'metric' ? 'kg' : 'lbs'}
-- Goal: ${profile.goal}
-- Daily targets: ${profile.macros.calories}cal / ${profile.macros.protein}g P / ${profile.macros.carbs}g C / ${profile.macros.fat}g F
-${this.selectedDietFilters.length > 0 ? `- Diet: ${this.selectedDietFilters.join(', ')}` : ''}` }
-    ];
+    // Fallback: generate meal plan via LLM
+    const llmPlan = await this._tryLLMMealPlan(profile);
+    if (llmPlan) {
+      this._renderMealPlan(llmPlan);
+      return;
+    }
 
+    UI.toast('Could not generate meal plan. Add your Anthropic API key in the admin panel.', 'error');
+  },
+
+  async _tryLLMMealPlan(profile) {
     try {
+      UI.showLoading('Generating meal plan with AI...');
+      const res = await fetch('/api/recipes/meal-plan-llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          diet_filters: this.selectedDietFilters,
+          goal: profile.goal || 'maintenance',
+          target_calories: profile.macros.calories || 2000,
+          target_protein: profile.macros.protein || 150
+        })
+      });
+      UI.hideLoading();
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      UI.hideLoading();
+      return null;
+    }
+  },
+
+  async _tryDbMealPlan(profile) {
+    try {
+      UI.showLoading('Building your weekly plan from recipes...');
+      const prefs = Store.getPreferences();
+      const res = await fetch('/api/recipes/meal-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          diet_filters: this.selectedDietFilters,
+          goal: profile.goal || '',
+          target_calories: profile.macros.calories || 2000,
+          target_protein: profile.macros.protein || 150,
+          liked: prefs.liked || [],
+          disliked: prefs.disliked || []
+        })
+      });
+      UI.hideLoading();
+      if (!res.ok) return null;
+      const data = await res.json();
+      // Verify we got enough meals
+      const totalMeals = data.plan?.reduce((s, d) => s + (d.meals?.length || 0), 0) || 0;
+      if (totalMeals < 14) return null; // Need at least 2 meals per day
+      return data;
+    } catch {
+      UI.hideLoading();
+      return null;
+    }
+  },
+
+  _renderMealPlan(result) {
+    const container = UI.$('#coach-results');
+    container.innerHTML = `
+      <div class="card-title" style="margin-bottom:12px">
+        Your Weekly Meal Plan
+        <span class="sug-source sug-source-db" style="margin-left:8px">From Recipe DB</span>
+      </div>
+      ${result.plan.map(day => `
+        <div class="card meal-plan-day">
+          <div class="meal-plan-day-title">${day.day}</div>
+          ${day.meals.map(m => `
+            <div class="meal-plan-item" ${m.recipe_id ? `data-recipe-id="${m.recipe_id}" style="cursor:pointer"` : ''}>
+              <div class="meal-plan-type">${m.type}</div>
+              <div class="meal-plan-name">${m.name}</div>
+              <div class="meal-plan-desc">${m.description}</div>
+              <div class="suggestion-macros" style="margin-top:4px">
+                <span style="color:var(--cal-color)">${m.calories}cal</span>
+                <span style="color:var(--protein-color)">${m.protein}gP</span>
+                <span style="color:var(--carb-color)">${m.carbs}gC</span>
+                <span style="color:var(--fat-color)">${m.fat}gF</span>
       const response = await LLM.call(messages, profile, 4000);
       const cleaned = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       const result = JSON.parse(cleaned);
@@ -736,21 +783,27 @@ ${this.selectedDietFilters.length > 0 ? `- Diet: ${this.selectedDietFilters.join
                   <span style="color:var(--fat-color)">${m.fat}gF</span>
                 </div>
               </div>
-            `).join('')}
-            <div class="meal-plan-day-total">
-              Day total: ${day.meals.reduce((s,m) => s+m.calories, 0)} cal /
-              ${day.meals.reduce((s,m) => s+m.protein, 0)}g P /
-              ${day.meals.reduce((s,m) => s+m.carbs, 0)}g C /
-              ${day.meals.reduce((s,m) => s+m.fat, 0)}g F
             </div>
+          `).join('')}
+          <div class="meal-plan-day-total">
+            Day total: ${day.meals.reduce((s,m) => s+m.calories, 0)} cal /
+            ${day.meals.reduce((s,m) => s+m.protein, 0)}g P /
+            ${day.meals.reduce((s,m) => s+m.carbs, 0)}g C /
+            ${day.meals.reduce((s,m) => s+m.fat, 0)}g F
           </div>
-        `).join('')}
-      `;
-    } catch (err) {
-      UI.toast(err.message || 'Failed to generate plan', 'error');
-    } finally {
-      UI.hideLoading();
-    }
+        </div>
+      `).join('')}
+    `;
+
+    // Click on meal plan items to view recipe detail
+    container.querySelectorAll('.meal-plan-item[data-recipe-id]').forEach(item => {
+      item.addEventListener('click', () => {
+        const id = +item.dataset.recipeId;
+        if (id && typeof Recipes !== 'undefined') {
+          Recipes.showDetail(id);
+        }
+      });
+    });
   },
 
   _bindLogSuggestions() {

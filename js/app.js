@@ -3,6 +3,13 @@ const App = {
   historyMonth: new Date(),
 
   init() {
+    // Auth gate: require login before anything
+    if (!Auth.isLoggedIn()) {
+      Auth.renderAuthScreen();
+      this.bindNav();
+      return;
+    }
+
     if (!Store.isProfileComplete()) {
       Profile.renderOnboarding();
     }
@@ -29,12 +36,13 @@ const App = {
     UI.$(`.nav-btn[data-screen="${screen}"]`)?.classList.add('active');
 
     // Update header
-    const titles = { dashboard: 'FitCoach', coach: 'AI Coach', body: 'Body & Workouts', history: 'History', profile: 'Profile' };
+    const titles = { dashboard: 'FitCoach', coach: 'AI Coach', recipes: 'Recipes', body: 'Body & Workouts', history: 'History', profile: 'Profile' };
     UI.$('.header h1').textContent = titles[screen] || 'FitCoach';
 
     switch (screen) {
       case 'dashboard': this.renderDashboard(); break;
       case 'coach': Coach.renderCoachScreen(); break;
+      case 'recipes': Recipes.renderScreen(); break;
       case 'body': BodyTrack.renderScreen(); break;
       case 'history': this.renderHistory(); break;
       case 'profile': Profile.renderProfileForm(); break;
