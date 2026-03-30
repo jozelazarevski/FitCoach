@@ -326,6 +326,215 @@ def get_active_api_key(provider='anthropic'):
         return dict(row) if row else None
 
 
+@admin_bp.route('/users', methods=['GET'])
+def list_users():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    search = request.args.get('search', '')
+    with use_db() as db:
+        conditions = ["1=1"]
+        params = []
+        if search:
+            conditions.append("(u.email LIKE ? OR u.name LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        where = " AND ".join(conditions)
+        rows = db.execute(f"""
+            SELECT u.id, u.email, u.name, u.profile_data, u.created_at, u.updated_at,
+                   (SELECT COUNT(*) FROM user_sessions WHERE user_id = u.id) as active_sessions
+            FROM users u WHERE {where} ORDER BY u.created_at DESC
+        """, params).fetchall()
+        total = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    users = []
+    for r in rows:
+        u = dict(r)
+        try:
+            u['profile'] = json.loads(u.pop('profile_data', '{}') or '{}')
+        except (json.JSONDecodeError, TypeError):
+            u['profile'] = {}
+        users.append(u)
+    return jsonify({'users': users, 'total': total})
+
+
+@admin_bp.route('/users/<int:user_id>', methods=['GET'])
+def get_user(user_id):
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    with use_db() as db:
+        row = db.execute("""
+            SELECT u.id, u.email, u.name, u.profile_data, u.user_data, u.created_at, u.updated_at,
+                   (SELECT COUNT(*) FROM user_sessions WHERE user_id = u.id) as active_sessions
+            FROM users u WHERE u.id = ?
+        """, (user_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'User not found'}), 404
+    user = dict(row)
+    try:
+        user['profile'] = json.loads(user.pop('profile_data', '{}') or '{}')
+    except (json.JSONDecodeError, TypeError):
+        user['profile'] = {}
+    try:
+        user['user_data'] = json.loads(user.get('user_data', '{}') or '{}')
+    except (json.JSONDecodeError, TypeError):
+        user['user_data'] = {}
+    return jsonify(user)
+
+
+@admin_bp.route('/users/<int:user_id>', methods=['PUT'])
+def update_user(user_id):
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data'}), 400
+    with use_db() as db:
+        sets = []
+        params = []
+        for field in ('name', 'email'):
+            if field in data:
+                sets.append(f"{field} = ?")
+                params.append(data[field])
+        if sets:
+            sets.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(user_id)
+            db.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", params)
+            db.commit()
+    return jsonify({'message': 'User updated'})
+
+
+@admin_bp.route('/users/<int:user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    with use_db() as db:
+        db.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
+        db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        db.commit()
+    return jsonify({'message': 'User deleted'})
+
+
+@admin_bp.route('/users/<int:user_id>/sessions', methods=['DELETE'])
+def revoke_user_sessions(user_id):
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    with use_db() as db:
+        count = db.execute("SELECT COUNT(*) FROM user_sessions WHERE user_id = ?", (user_id,)).fetchone()[0]
+        db.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
+        db.commit()
+    return jsonify({'message': f'Revoked {count} sessions'})
+
+
+@admin_bp.route('/usage', methods=['GET'])
+def usage_overview():
+    """Comprehensive usage analytics."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    with use_db() as db:
+        # Recipe stats
+        total_recipes = db.execute("SELECT COUNT(*) FROM recipes WHERE status = 'active'").fetchone()[0]
+        recipes_by_source = db.execute("""
+            SELECT COALESCE(source, 'unknown') as source, COUNT(*) as count
+            FROM recipes WHERE status = 'active' GROUP BY source ORDER BY count DESC
+        """).fetchall()
+
+        # User stats
+        total_users = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        active_sessions = db.execute("SELECT COUNT(*) FROM user_sessions").fetchone()[0]
+        new_users_7d = db.execute(
+            "SELECT COUNT(*) FROM users WHERE created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+        new_users_30d = db.execute(
+            "SELECT COUNT(*) FROM users WHERE created_at >= datetime('now', '-30 days')"
+        ).fetchone()[0]
+
+        # LLM usage
+        llm_total = db.execute("SELECT COUNT(*) FROM llm_cost_log").fetchone()[0]
+        llm_by_source = db.execute("""
+            SELECT served_from, COUNT(*) as requests, SUM(recipe_count) as recipes
+            FROM llm_cost_log GROUP BY served_from
+        """).fetchall()
+        llm_by_day = db.execute("""
+            SELECT DATE(created_at) as day, served_from, COUNT(*) as requests
+            FROM llm_cost_log
+            WHERE created_at >= datetime('now', '-30 days')
+            GROUP BY day, served_from ORDER BY day
+        """).fetchall()
+
+        # Recipe creation timeline (last 30 days)
+        recipes_by_day = db.execute("""
+            SELECT DATE(created_at) as day, COUNT(*) as count
+            FROM recipes WHERE created_at >= datetime('now', '-30 days') AND status = 'active'
+            GROUP BY day ORDER BY day
+        """).fetchall()
+
+        # User registration timeline
+        users_by_day = db.execute("""
+            SELECT DATE(created_at) as day, COUNT(*) as count
+            FROM users WHERE created_at >= datetime('now', '-30 days')
+            GROUP BY day ORDER BY day
+        """).fetchall()
+
+        # Top cuisines & categories
+        top_cuisines = db.execute("""
+            SELECT cuisine, COUNT(*) as count FROM recipes WHERE status = 'active'
+            GROUP BY cuisine ORDER BY count DESC LIMIT 10
+        """).fetchall()
+        top_categories = db.execute("""
+            SELECT category, COUNT(*) as count FROM recipes WHERE status = 'active'
+            GROUP BY category ORDER BY count DESC LIMIT 10
+        """).fetchall()
+        meal_distribution = db.execute("""
+            SELECT meal_type, COUNT(*) as count FROM recipes WHERE status = 'active'
+            GROUP BY meal_type ORDER BY count DESC
+        """).fetchall()
+
+        # Generation jobs summary
+        gen_completed = db.execute(
+            "SELECT COUNT(*) FROM generation_jobs WHERE status IN ('completed', 'completed_with_errors')"
+        ).fetchone()[0]
+        gen_running = db.execute(
+            "SELECT COUNT(*) FROM generation_jobs WHERE status = 'running'"
+        ).fetchone()[0]
+        gen_total_recipes = db.execute(
+            "SELECT COALESCE(SUM(completed), 0) FROM generation_jobs"
+        ).fetchone()[0]
+
+        # DB size
+        import os
+        from config import DB_PATH
+        db_size_mb = round(os.path.getsize(DB_PATH) / (1024 * 1024), 2) if os.path.exists(DB_PATH) else 0
+
+    return jsonify({
+        'recipes': {
+            'total': total_recipes,
+            'by_source': [dict(r) for r in recipes_by_source],
+            'by_day': [dict(r) for r in recipes_by_day],
+            'top_cuisines': [dict(r) for r in top_cuisines],
+            'top_categories': [dict(r) for r in top_categories],
+            'meal_distribution': [dict(r) for r in meal_distribution],
+        },
+        'users': {
+            'total': total_users,
+            'active_sessions': active_sessions,
+            'new_7d': new_users_7d,
+            'new_30d': new_users_30d,
+            'by_day': [dict(r) for r in users_by_day],
+        },
+        'llm': {
+            'total_requests': llm_total,
+            'by_source': [dict(r) for r in llm_by_source],
+            'by_day': [dict(r) for r in llm_by_day],
+        },
+        'generation': {
+            'completed_jobs': gen_completed,
+            'running_jobs': gen_running,
+            'total_generated': gen_total_recipes,
+        },
+        'system': {
+            'db_size_mb': db_size_mb,
+        }
+    })
+
+
 @admin_bp.route('/generate/start', methods=['POST'])
 def start_generation():
     if not _check_admin(request):
