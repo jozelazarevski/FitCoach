@@ -243,7 +243,7 @@ const Coach = {
         <div class="suggestion-card ${i === 0 ? 'top-pick' : ''}" id="suggestion-${i}">
           <div class="suggestion-rank-badge">
             ${i === 0 ? '#1 Best Pick' : `#${s.rank || i + 1}`}
-            <span class="sug-source sug-source-db">DB</span>
+            <span class="sug-source ${s.source === 'llm' ? 'sug-source-llm' : 'sug-source-db'}">${s.source === 'llm' ? 'LLM' : 'DB'}</span>
           </div>
           <div class="suggestion-header">
             <div class="suggestion-title">${s.name}</div>
@@ -353,7 +353,36 @@ const Coach = {
       return;
     }
 
-    UI.toast('Not enough recipes in the database to build a meal plan. Add more recipes via the admin panel.', 'error');
+    // Fallback: generate meal plan via LLM
+    const llmPlan = await this._tryLLMMealPlan(profile);
+    if (llmPlan) {
+      this._renderMealPlan(llmPlan);
+      return;
+    }
+
+    UI.toast('Could not generate meal plan. Make sure Ollama is running or add an API key.', 'error');
+  },
+
+  async _tryLLMMealPlan(profile) {
+    try {
+      UI.showLoading('Generating meal plan with AI...');
+      const res = await fetch('/api/recipes/meal-plan-llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          diet_filters: this.selectedDietFilters,
+          goal: profile.goal || 'maintenance',
+          target_calories: profile.macros.calories || 2000,
+          target_protein: profile.macros.protein || 150
+        })
+      });
+      UI.hideLoading();
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      UI.hideLoading();
+      return null;
+    }
   },
 
   async _tryDbMealPlan(profile) {

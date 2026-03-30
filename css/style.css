@@ -1864,6 +1864,7 @@ html, body {
 }
 .sug-source-db { background: rgba(16,185,129,0.12); color: #34d399; }
 .sug-source-ai { background: rgba(108,92,231,0.12); color: #a78bfa; }
+.sug-source-llm { background: rgba(245,158,11,0.12); color: #fbbf24; }
 .sug-meta {
   display: flex; gap: 8px; font-size: 11px; color: var(--text-dim);
   margin-top: 4px;

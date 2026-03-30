@@ -5,6 +5,143 @@ from backend.models import get_recipe, search_recipes, suggest_recipes, recipe_t
 recipes_bp = Blueprint('recipes', __name__)
 
 
+@recipes_bp.route('/suggest-llm', methods=['POST'])
+def suggest_llm():
+    """Generate recipe suggestions via LLM when DB is empty or insufficient."""
+    from backend.llm_client import call_llm_json
+
+    data = request.get_json() or {}
+    meal_types = data.get('meal_types', ['dinner'])
+    remaining = data.get('remaining', {})
+    goal = data.get('goal', 'maintenance')
+    diet_filters = data.get('diet_filters', [])
+    liked = data.get('liked', [])
+    disliked = data.get('disliked', [])
+    hour = data.get('hour_of_day', 12)
+
+    diet_str = ', '.join(diet_filters) if diet_filters else 'no restrictions'
+    liked_str = ', '.join(liked[:5]) if liked else 'none'
+    disliked_str = ', '.join(disliked[:5]) if disliked else 'none'
+
+    prompt = f"""You are an elite fitness nutrition coach. Suggest exactly 5 meal recipes for a client.
+
+Context:
+- Meal type: {', '.join(meal_types)}
+- Goal: {goal}
+- Remaining macros today: {remaining.get('calories', 2000)} cal, {remaining.get('protein', 40)}g protein, {remaining.get('carbs', 50)}g carbs, {remaining.get('fat', 20)}g fat
+- Diet restrictions: {diet_str}
+- Foods they like: {liked_str}
+- Foods they dislike: {disliked_str}
+- Current hour: {hour}:00
+
+Return ONLY a valid JSON object with this exact structure:
+{{
+  "top_pick_reason": "1-2 sentence explanation of why #1 is the best choice right now",
+  "suggestions": [
+    {{
+      "name": "Appetizing recipe name",
+      "description": "One sentence describing the dish",
+      "why": "Why this fits the client's needs right now",
+      "calories": <integer>,
+      "protein": <integer grams>,
+      "carbs": <integer grams>,
+      "fat": <integer grams>,
+      "cuisine": "Italian/Mexican/Thai/etc",
+      "category": "poultry/red_meat/fish/seafood/vegan/vegetarian",
+      "meal_type": "{meal_types[0]}",
+      "difficulty": "easy/medium/hard",
+      "prep_time_min": <integer>,
+      "cook_time_min": <integer>,
+      "rank": <1-5>
+    }}
+  ]
+}}
+
+Rules:
+- CRITICAL: protein*4 + carbs*4 + fat*9 must be within 10% of stated calories
+- Rank 1 = best fit for remaining macros and goal
+- Vary cuisines and protein sources across the 5 suggestions
+- Each suggestion should fit within the remaining macro budget
+- Respect diet restrictions strictly
+- Avoid disliked foods, prefer liked foods
+- For {goal}: {"high protein, low cal" if goal in ("fat_loss", "cutting") else "high protein, high carbs" if goal in ("bulking", "muscle_building") else "balanced macros"}"""
+
+    try:
+        result = call_llm_json(prompt, max_tokens=3000)
+        if isinstance(result, dict) and 'suggestions' in result:
+            # Add source marker
+            for s in result['suggestions']:
+                s['source'] = 'llm'
+            return jsonify(result)
+        return jsonify({'error': 'Invalid LLM response format'}), 500
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        return jsonify({'error': f'LLM generation failed: {e}'}), 500
+
+
+@recipes_bp.route('/generate-llm', methods=['POST'])
+def generate_recipe_llm():
+    """Generate a full recipe via LLM for a given suggestion."""
+    from backend.llm_client import call_llm_json
+
+    data = request.get_json() or {}
+    name = data.get('name', 'a healthy meal')
+    calories = data.get('calories', 500)
+    protein = data.get('protein', 35)
+    carbs = data.get('carbs', 50)
+    fat = data.get('fat', 15)
+    cuisine = data.get('cuisine', '')
+    category = data.get('category', '')
+    diet_filters = data.get('diet_filters', [])
+
+    diet_str = ', '.join(diet_filters) if diet_filters else 'no restrictions'
+
+    prompt = f"""Generate a complete recipe for: "{name}"
+
+Target macros per serving: {calories} cal, {protein}g protein, {carbs}g carbs, {fat}g fat
+{f"Cuisine: {cuisine}" if cuisine else ""}
+{f"Category: {category}" if category else ""}
+Diet restrictions: {diet_str}
+
+Return ONLY a valid JSON object:
+{{
+  "name": "{name}",
+  "prep_time": "X min",
+  "cook_time": "X min",
+  "servings": "X",
+  "ingredients": ["200g chicken breast", "1 cup rice", ...],
+  "steps": ["Step 1...", "Step 2...", ...],
+  "tips": "One fitness coaching tip about this meal",
+  "calories": {calories},
+  "protein": {protein},
+  "carbs": {carbs},
+  "fat": {fat}
+}}
+
+Rules:
+- Include exact measurements for all ingredients
+- 6-12 ingredients, 4-8 clear steps
+- Make it practical, delicious, and achievable for a home cook
+- The tip should relate to fitness/nutrition timing/benefits
+- Macros must be realistic for the ingredients listed"""
+
+    try:
+        result = call_llm_json(prompt, max_tokens=3000)
+        if isinstance(result, dict) and 'ingredients' in result:
+            # Ensure ingredients are strings for frontend rendering
+            result['ingredients'] = [
+                f"{ing['amount']} {ing['item']}" if isinstance(ing, dict) else str(ing)
+                for ing in result['ingredients']
+            ]
+            return jsonify(result)
+        return jsonify({'error': 'Invalid LLM response format'}), 500
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        return jsonify({'error': f'LLM recipe generation failed: {e}'}), 500
+
+
 @recipes_bp.route('', methods=['GET'])
 def list_recipes():
     filters = {
@@ -176,6 +313,65 @@ def meal_plan():
         plan.append({'day': day, 'meals': meals})
 
     return jsonify({'plan': plan, 'source': 'database'})
+
+
+@recipes_bp.route('/meal-plan-llm', methods=['POST'])
+def meal_plan_llm():
+    """Generate a 7-day meal plan via LLM when DB is empty."""
+    from backend.llm_client import call_llm_json
+
+    data = request.get_json() or {}
+    goal = data.get('goal', 'maintenance')
+    target_cal = data.get('target_calories', 2000)
+    target_prot = data.get('target_protein', 150)
+    diet_filters = data.get('diet_filters', [])
+
+    diet_str = ', '.join(diet_filters) if diet_filters else 'no restrictions'
+
+    prompt = f"""Create a 7-day meal plan for a fitness-focused client.
+
+Target per day: {target_cal} calories, {target_prot}g protein
+Goal: {goal}
+Diet restrictions: {diet_str}
+
+Return ONLY valid JSON:
+{{
+  "plan": [
+    {{
+      "day": "Monday",
+      "meals": [
+        {{
+          "type": "breakfast",
+          "name": "Meal name",
+          "description": "One sentence description",
+          "calories": <int>,
+          "protein": <int>,
+          "carbs": <int>,
+          "fat": <int>
+        }}
+      ]
+    }}
+  ]
+}}
+
+Rules:
+- Each day: breakfast, lunch, dinner, snack (4 meals)
+- Daily total should be close to {target_cal} cal and {target_prot}g protein
+- protein*4 + carbs*4 + fat*9 must be within 10% of stated calories per meal
+- Vary cuisines and proteins across the week
+- Respect diet restrictions strictly
+- Make meals practical and appetizing"""
+
+    try:
+        result = call_llm_json(prompt, max_tokens=6000)
+        if isinstance(result, dict) and 'plan' in result:
+            result['source'] = 'llm'
+            return jsonify(result)
+        return jsonify({'error': 'Invalid meal plan format'}), 500
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        return jsonify({'error': f'Meal plan generation failed: {e}'}), 500
 
 
 @recipes_bp.route('/<int:recipe_id>/similar', methods=['GET'])

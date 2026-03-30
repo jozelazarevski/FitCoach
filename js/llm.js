@@ -396,12 +396,58 @@ Rules:
   },
 
   async getCoachSuggestion(mealTypes, dietFilters = [], customRequest = '') {
+    // Try DB-based suggestions first
     const backendResult = await this._tryBackendSuggest(mealTypes, dietFilters, customRequest);
-    if (backendResult) return backendResult;
-    throw new Error('No matching recipes found in the database. Try adding more recipes via the admin panel or adjusting your filters.');
+    if (backendResult && backendResult.suggestions && backendResult.suggestions.length > 0) {
+      return backendResult;
+    }
+
+    // Fallback: generate suggestions via LLM
+    const llmResult = await this._tryLLMSuggest(mealTypes, dietFilters, customRequest);
+    if (llmResult) return llmResult;
+
+    throw new Error('No recipes available. Make sure Ollama is running or add an API key in the admin panel.');
+  },
+
+  async _tryLLMSuggest(mealTypes, dietFilters, customRequest) {
+    try {
+      const profile = Store.getProfile();
+      const todayTotals = Store.getTodayTotals();
+      const remaining = {
+        calories: Math.max(0, profile.macros.calories - todayTotals.calories),
+        protein: Math.max(0, profile.macros.protein - todayTotals.protein),
+        carbs: Math.max(0, profile.macros.carbs - todayTotals.carbs),
+        fat: Math.max(0, profile.macros.fat - todayTotals.fat)
+      };
+      const prefs = Store.getPreferences();
+
+      const res = await fetch(`${this.backendUrl}/api/recipes/suggest-llm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meal_types: Array.isArray(mealTypes) ? mealTypes : [mealTypes],
+          diet_filters: dietFilters || [],
+          goal: profile.goal || '',
+          remaining,
+          liked: prefs.liked || [],
+          disliked: prefs.disliked || [],
+          hour_of_day: new Date().getHours()
+        })
+      });
+
+      if (!res.ok) return null;
+      const result = await res.json();
+      if (result.suggestions && result.suggestions.length > 0) {
+        return result;
+      }
+    } catch {
+      // LLM endpoint not available
+    }
+    return null;
   },
 
   async generateRecipe(suggestion, dietFilters = []) {
+    // Try DB first if we have an ID
     if (suggestion.id) {
       const dbRecipe = await this._fetchBackendRecipe(suggestion.id);
       if (dbRecipe) {
@@ -420,7 +466,33 @@ Rules:
         };
       }
     }
-    throw new Error('Recipe not found in database. Add more recipes via the admin panel.');
+
+    // Fallback: generate full recipe via LLM
+    return this._generateRecipeLLM(suggestion, dietFilters);
+  },
+
+  async _generateRecipeLLM(suggestion, dietFilters) {
+    const res = await fetch(`${this.backendUrl}/api/recipes/generate-llm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: suggestion.name,
+        calories: suggestion.calories,
+        protein: suggestion.protein,
+        carbs: suggestion.carbs,
+        fat: suggestion.fat,
+        cuisine: suggestion.cuisine || '',
+        category: suggestion.category || '',
+        diet_filters: dietFilters || []
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to generate recipe. Check your LLM configuration.');
+    }
+
+    return await res.json();
   },
 
   async getGapAdvice() {
