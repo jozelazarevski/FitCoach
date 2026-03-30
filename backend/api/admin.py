@@ -1,5 +1,7 @@
 import json
 import hashlib
+import hmac
+import logging
 import secrets
 import threading
 from flask import Blueprint, request, jsonify
@@ -28,11 +30,13 @@ def _check_admin(req):
 
 @admin_bp.route('/login', methods=['POST'])
 def login():
+    from config import ADMIN_PASSWORD
     data = request.get_json() or {}
     password = data.get('password', '')
-    expected = hashlib.sha256(b'fitcoach-admin').hexdigest()
+    expected = hashlib.sha256(ADMIN_PASSWORD.encode()).hexdigest()
     provided = hashlib.sha256(password.encode()).hexdigest()
-    if provided != expected:
+    if not hmac.compare_digest(provided, expected):
+        logging.warning("Failed admin login attempt from %s", request.remote_addr)
         return jsonify({'error': 'Invalid password'}), 401
 
     token = secrets.token_hex(32)
@@ -109,8 +113,11 @@ def list_admin_recipes():
         'search': request.args.get('search'),
     }.items() if v}
 
-    page = int(request.args.get('page', 1))
-    per_page = min(int(request.args.get('per_page', 50)), 200)
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        per_page = min(max(1, int(request.args.get('per_page', 50))), 200)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid pagination parameters'}), 400
 
     with use_db() as db:
         conditions = ["1=1"]
@@ -317,13 +324,20 @@ def get_active_api_key(provider='anthropic'):
             "SELECT api_key, model FROM api_keys WHERE provider = ? AND is_active = 1 ORDER BY id LIMIT 1",
             (provider,)
         ).fetchone()
-        if row:
+        return dict(row) if row else None
+
+
+def record_api_key_usage(provider='anthropic'):
+    """Record that an API key was used (call after successful LLM call)."""
+    try:
+        with use_db() as db:
             db.execute(
                 "UPDATE api_keys SET usage_count = usage_count + 1, last_used_at = CURRENT_TIMESTAMP WHERE provider = ? AND is_active = 1",
                 (provider,)
             )
             db.commit()
-        return dict(row) if row else None
+    except Exception:
+        logging.debug("Failed to record API key usage", exc_info=True)
 
 
 @admin_bp.route('/generate/start', methods=['POST'])

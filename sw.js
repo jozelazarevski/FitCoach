@@ -1,8 +1,7 @@
-const CACHE_NAME = 'fitcoach-v14';
+const CACHE_NAME = 'fitcoach-v15';
 const API_CACHE = 'fitcoach-api-v1';
 const API_CACHE_MAX_AGE = 5 * 60 * 1000; // 5 minutes
 
-const CACHE_NAME = 'fitcoach-v6';
 const ASSETS = [
   '/index.html',
   '/css/style.css',
@@ -16,11 +15,10 @@ const ASSETS = [
   '/js/profile.js',
   '/js/ui.js',
   '/js/body.js',
-  '/manifest.json',
-  '/icons/icon.svg'
   '/js/db.js',
   '/data/recipes.db',
-  '/manifest.json'
+  '/manifest.json',
+  '/icons/icon.svg'
 ];
 const CDN_ASSETS = [
   'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js',

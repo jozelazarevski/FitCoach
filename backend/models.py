@@ -55,21 +55,20 @@ def search_recipes(filters=None, page=1, per_page=20):
             if filters.get('category'):
                 conditions.append("r.category = ?")
                 params.append(filters['category'])
-            if filters.get('max_calories'):
-                conditions.append("r.calories <= ?")
-                params.append(int(filters['max_calories']))
-            if filters.get('min_protein'):
-                conditions.append("r.protein >= ?")
-                params.append(int(filters['min_protein']))
-            if filters.get('max_carbs'):
-                conditions.append("r.carbs <= ?")
-                params.append(int(filters['max_carbs']))
-            if filters.get('max_fat'):
-                conditions.append("r.fat <= ?")
-                params.append(int(filters['max_fat']))
-            if filters.get('max_time'):
-                conditions.append("r.total_time_min <= ?")
-                params.append(int(filters['max_time']))
+            for filter_key, column, op in [
+                ('max_calories', 'r.calories', '<='),
+                ('min_protein', 'r.protein', '>='),
+                ('max_carbs', 'r.carbs', '<='),
+                ('max_fat', 'r.fat', '<='),
+                ('max_time', 'r.total_time_min', '<='),
+            ]:
+                val = filters.get(filter_key)
+                if val is not None:
+                    try:
+                        conditions.append(f"{column} {op} ?")
+                        params.append(int(val))
+                    except (ValueError, TypeError):
+                        pass  # skip malformed numeric filter
             if filters.get('search'):
                 conditions.append("r.name LIKE ?")
                 params.append(f"%{filters['search']}%")

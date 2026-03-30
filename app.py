@@ -6,19 +6,25 @@ Usage:
     python app.py [--port 5000] [--debug]
 """
 
+import logging
+import time
+from collections import defaultdict
 from flask import Flask, send_from_directory, jsonify, request
 from backend.db import init_db
 from backend.api.recipes import recipes_bp
 from backend.api.admin import admin_bp
 from backend.api.auth import auth_bp
-import os
+from config import SECRET_KEY, CORS_ORIGINS
+
+logging.basicConfig(level=logging.INFO)
 
 # Allowed static directories - never serve project root directly
 STATIC_DIRS = {'js', 'css', 'admin'}
 
 app = Flask(__name__)
 
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'fitcoach-dev-key')
+app.config['SECRET_KEY'] = SECRET_KEY
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max request size
 
 # Register API blueprints
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -26,11 +32,71 @@ app.register_blueprint(recipes_bp, url_prefix='/api/recipes')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
 
 
-# CORS support for API routes
+# ---------------------------------------------------------------------------
+#  Simple in-memory rate limiter
+# ---------------------------------------------------------------------------
+_rate_limit_store = defaultdict(list)
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMITS = {
+    '/api/auth/login': 10,
+    '/api/auth/register': 5,
+    '/api/admin/login': 5,
+    '/api/recipes/suggest-llm': 10,
+    '/api/recipes/generate-llm': 10,
+    '/api/recipes/meal-plan-llm': 5,
+}
+
+
+def _check_rate_limit(key, limit):
+    """Return True if request should be rate-limited."""
+    now = time.time()
+    timestamps = _rate_limit_store[key]
+    # Prune old entries
+    _rate_limit_store[key] = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
+    if len(_rate_limit_store[key]) >= limit:
+        return True
+    _rate_limit_store[key].append(now)
+    return False
+
+
+@app.before_request
+def rate_limit():
+    path = request.path
+    if path in RATE_LIMITS and request.method in ('POST', 'PUT'):
+        client_ip = request.remote_addr or 'unknown'
+        key = f"{client_ip}:{path}"
+        if _check_rate_limit(key, RATE_LIMITS[path]):
+            return jsonify({'error': 'Too many requests. Please try again later.'}), 429
+
+
+# ---------------------------------------------------------------------------
+#  CORS + security headers
+# ---------------------------------------------------------------------------
+def _get_cors_origin():
+    """Return the appropriate CORS origin header value."""
+    if CORS_ORIGINS == '*':
+        return '*'
+    allowed = [o.strip() for o in CORS_ORIGINS.split(',')]
+    origin = request.headers.get('Origin', '')
+    if origin in allowed:
+        return origin
+    return None
+
+
 @app.after_request
-def add_cors_headers(response):
+def add_security_headers(response):
+    # Security headers on all responses
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+
+    # CORS headers on API routes
     if request.path.startswith('/api/'):
-        response.headers['Access-Control-Allow-Origin'] = '*'
+        cors_origin = _get_cors_origin()
+        if cors_origin:
+            response.headers['Access-Control-Allow-Origin'] = cors_origin
+            if cors_origin != '*':
+                response.headers['Vary'] = 'Origin'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Admin-Token, Authorization'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     return response
@@ -95,6 +161,7 @@ def health():
             count = db.execute("SELECT COUNT(*) FROM recipes WHERE status = 'active'").fetchone()[0]
         return jsonify({'status': 'ok', 'recipes_count': count})
     except Exception as e:
+        logging.error("Health check failed: %s", e)
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
 
