@@ -251,7 +251,7 @@ def generate_recipes_batch(client, prompt_info, model=None):
     prompt = _build_prompt(prompt_info)
 
     response = client.messages.create(
-        model=model or "claude-haiku-4-5-20251001",
+        model=model or "claude-3-5-haiku-20241022",
         max_tokens=16000,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -441,7 +441,7 @@ def run_generation(batch_id=None, batch_size=RECIPES_PER_API_CALL, max_items=Non
 
         client = anthropic.Anthropic(api_key=api_key)
         # Resolve Claude model: explicit param > DB-stored model > default
-        claude_model = model or (key_data or {}).get('model', '') or "claude-haiku-4-5-20251001"
+        claude_model = model or (key_data or {}).get('model', '') or "claude-3-5-haiku-20241022"
         print(f"Using Claude model: {claude_model}")
 
     # Build or resume plan

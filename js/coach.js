@@ -360,7 +360,7 @@ const Coach = {
       return;
     }
 
-    UI.toast('Could not generate meal plan. Make sure Ollama is running or add an API key.', 'error');
+    UI.toast('Could not generate meal plan. Add your Anthropic API key in the admin panel.', 'error');
   },
 
   async _tryLLMMealPlan(profile) {

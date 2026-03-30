@@ -20,38 +20,19 @@ from config import ANTHROPIC_API_KEY, OLLAMA_BASE_URL, OLLAMA_MODEL
 
 
 def _get_provider_config():
-    """Get the best available LLM provider config from DB or env."""
+    """Get the best available LLM provider config from DB or env.
+
+    Priority: Anthropic DB key > Anthropic env key > Ollama (if configured).
+    """
     from backend.api.admin import get_active_api_key
 
-    # Try Ollama first (free, local)
-    ollama_data = get_active_api_key('ollama')
-    if ollama_data and _requests:
-        url = ollama_data.get('api_key', '') or OLLAMA_BASE_URL
-        model = ollama_data.get('model', '') or OLLAMA_MODEL
-        # Quick check if Ollama is reachable
-        try:
-            r = _requests.get(f"{url}/api/tags", timeout=2)
-            if r.ok:
-                return {'provider': 'ollama', 'url': url, 'model': model}
-        except Exception:
-            pass
-
-    # Check env-based Ollama
-    if _requests and OLLAMA_BASE_URL:
-        try:
-            r = _requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
-            if r.ok:
-                return {'provider': 'ollama', 'url': OLLAMA_BASE_URL, 'model': OLLAMA_MODEL}
-        except Exception:
-            pass
-
-    # Try Anthropic from DB
+    # Try Anthropic from DB first (primary for web deployment)
     anthropic_data = get_active_api_key('anthropic')
     if anthropic_data and anthropic:
         return {
             'provider': 'anthropic',
             'api_key': anthropic_data['api_key'],
-            'model': anthropic_data.get('model', '') or 'claude-haiku-4-5-20251001'
+            'model': anthropic_data.get('model', '') or 'claude-3-5-haiku-20241022'
         }
 
     # Try Anthropic from env
@@ -59,8 +40,20 @@ def _get_provider_config():
         return {
             'provider': 'anthropic',
             'api_key': ANTHROPIC_API_KEY,
-            'model': 'claude-haiku-4-5-20251001'
+            'model': 'claude-3-5-haiku-20241022'
         }
+
+    # Fallback: Ollama (local dev only)
+    ollama_data = get_active_api_key('ollama')
+    if ollama_data and _requests:
+        url = ollama_data.get('api_key', '') or OLLAMA_BASE_URL
+        model = ollama_data.get('model', '') or OLLAMA_MODEL
+        try:
+            r = _requests.get(f"{url}/api/tags", timeout=2)
+            if r.ok:
+                return {'provider': 'ollama', 'url': url, 'model': model}
+        except Exception:
+            pass
 
     return None
 
@@ -73,7 +66,7 @@ def call_llm(prompt, max_tokens=4000):
     """
     config = _get_provider_config()
     if not config:
-        raise RuntimeError("No LLM provider configured. Add an API key via admin panel or set OLLAMA_BASE_URL / ANTHROPIC_API_KEY.")
+        raise RuntimeError("No LLM provider configured. Add your Anthropic API key via admin panel or set ANTHROPIC_API_KEY env var.")
 
     if config['provider'] == 'ollama':
         return _call_ollama(config['url'], config['model'], prompt, max_tokens)

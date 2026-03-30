@@ -227,7 +227,7 @@ const LLM = {
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-3-5-haiku-20241022',
         max_tokens: maxTokens,
         system: systemMsg,
         messages: userMsgs.map(m => ({ role: m.role, content: m.content }))
@@ -277,7 +277,7 @@ Rules:
           'anthropic-dangerous-direct-browser-access': 'true'
         },
         body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
+          model: 'claude-3-5-haiku-20241022',
           max_tokens: 1500,
           system: systemPrompt,
           messages: [{
@@ -406,7 +406,7 @@ Rules:
     const llmResult = await this._tryLLMSuggest(mealTypes, dietFilters, customRequest);
     if (llmResult) return llmResult;
 
-    throw new Error('No recipes available. Make sure Ollama is running or add an API key in the admin panel.');
+    throw new Error('No recipes available. Add your Anthropic API key in the admin panel.');
   },
 
   async _tryLLMSuggest(mealTypes, dietFilters, customRequest) {
