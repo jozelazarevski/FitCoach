@@ -854,6 +854,30 @@ html, body {
 .coach-context-summary { font-size: 12px; color: var(--text-dim); text-align: center; padding: 8px 12px; margin-bottom: 8px; }
 .coach-auto-note { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-style: italic; }
 
+/* Post-meal feeling prompt */
+.feeling-prompt-header { margin-bottom: 16px; }
+.feeling-prompt-desc { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+.feeling-category { margin-bottom: 14px; }
+.feeling-label { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 6px; }
+.feeling-options { display: flex; gap: 8px; }
+.feeling-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 6px; border-radius: 10px; border: 1.5px solid var(--border); background: var(--card-bg); cursor: pointer; transition: all 0.15s; }
+.feeling-btn:hover { border-color: var(--primary); }
+.feeling-btn.active { border-color: var(--primary); background: rgba(99,102,241,0.1); }
+.feeling-emoji { font-size: 22px; line-height: 1; }
+.feeling-text { font-size: 11px; color: var(--text-dim); }
+.feeling-btn.active .feeling-text { color: var(--primary); font-weight: 600; }
+.feeling-check-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); cursor: pointer; }
+.feeling-check-label input { width: 16px; height: 16px; accent-color: var(--primary); }
+
+/* Feeling badges on meal cards */
+.meal-feelings { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.feeling-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+.feeling-pos { background: rgba(34,197,94,0.12); color: #22c55e; }
+.feeling-neutral { background: rgba(156,163,175,0.12); color: var(--text-dim); }
+.feeling-neg { background: rgba(239,68,68,0.12); color: #ef4444; }
+.feeling-add-btn { font-size: 11px; color: var(--text-dim); background: none; border: 1px dashed var(--border); border-radius: 8px; padding: 4px 10px; cursor: pointer; margin-top: 6px; transition: all 0.15s; }
+.feeling-add-btn:hover { border-color: var(--primary); color: var(--primary); }
+
 /* Auth screens */
 .auth-container {
   max-width: 380px;

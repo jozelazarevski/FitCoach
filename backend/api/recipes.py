@@ -423,6 +423,8 @@ def suggest():
         'water_target_ml': data.get('water_target_ml', 2300),
         'days_with_logs': data.get('days_with_logs', 0),
         'minutes_since_last_meal': data.get('minutes_since_last_meal'),
+        'problematic_foods': data.get('problematic_foods', []),
+        'beneficial_foods': data.get('beneficial_foods', []),
     }
     results = suggest_recipes(context, limit=5)
     if not results:
