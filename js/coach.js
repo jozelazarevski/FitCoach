@@ -569,20 +569,20 @@ const Coach = {
   showSuggestions(result) {
     const container = UI.$('#coach-results');
     container.innerHTML = `
-      ${result.top_pick_reason ? `<div class="top-pick-banner"><div class="top-pick-label">Why #1 is your best pick right now</div><div class="top-pick-text">${result.top_pick_reason}</div></div>` : ''}
-      ${result.reasoning ? `<div class="coach-reasoning">${result.reasoning}</div>` : ''}
+      ${result.top_pick_reason ? `<div class="top-pick-banner"><div class="top-pick-label">Why #1 is your best pick right now</div><div class="top-pick-text">${UI.esc(result.top_pick_reason)}</div></div>` : ''}
+      ${result.reasoning ? `<div class="coach-reasoning">${UI.esc(result.reasoning)}</div>` : ''}
       ${result.suggestions.map((s, i) => `
         <div class="suggestion-card ${i === 0 ? 'top-pick' : ''}" id="suggestion-${i}">
           <div class="suggestion-rank-badge">${i === 0 ? '#1 Best Pick' : `#${s.rank || i + 1}`}</div>
           <div class="suggestion-header">
-            <div class="suggestion-title">${s.name}</div>
+            <div class="suggestion-title">${UI.esc(s.name)}</div>
             <div class="suggestion-actions">
               <button class="sug-btn sug-like" data-index="${i}" title="I like this kind of food">&#9829;</button>
               <button class="sug-btn sug-discard" data-index="${i}" title="Not for me">&#10005;</button>
             </div>
           </div>
-          ${s.why ? `<div class="suggestion-why">${s.why}</div>` : ''}
-          <div class="suggestion-desc">${s.description}</div>
+          ${s.why ? `<div class="suggestion-why">${UI.esc(s.why)}</div>` : ''}
+          <div class="suggestion-desc">${UI.esc(s.description)}</div>
           <div class="suggestion-macros">
             <span style="color:var(--cal-color)">${s.calories} cal</span>
             <span style="color:var(--protein-color)">${s.protein}g P</span>
@@ -723,12 +723,12 @@ ${this.selectedDietFilters.length > 0 ? `- Diet: ${this.selectedDietFilters.join
         <div class="card-title" style="margin-bottom:12px">Your Weekly Meal Plan</div>
         ${result.plan.map(day => `
           <div class="card meal-plan-day">
-            <div class="meal-plan-day-title">${day.day}</div>
+            <div class="meal-plan-day-title">${UI.esc(day.day)}</div>
             ${day.meals.map(m => `
               <div class="meal-plan-item">
-                <div class="meal-plan-type">${m.type}</div>
-                <div class="meal-plan-name">${m.name}</div>
-                <div class="meal-plan-desc">${m.description}</div>
+                <div class="meal-plan-type">${UI.esc(m.type)}</div>
+                <div class="meal-plan-name">${UI.esc(m.name)}</div>
+                <div class="meal-plan-desc">${UI.esc(m.description)}</div>
                 <div class="suggestion-macros" style="margin-top:4px">
                   <span style="color:var(--cal-color)">${m.calories}cal</span>
                   <span style="color:var(--protein-color)">${m.protein}gP</span>
@@ -778,29 +778,29 @@ ${this.selectedDietFilters.length > 0 ? `- Diet: ${this.selectedDietFilters.join
     return `
       <div class="recipe-box">
         <div class="recipe-header">
-          <div class="recipe-title">${recipe.name}</div>
+          <div class="recipe-title">${UI.esc(recipe.name)}</div>
           <div class="recipe-meta">
-            ${recipe.prep_time ? `<span>Prep: ${recipe.prep_time}</span>` : ''}
-            ${recipe.cook_time ? `<span>Cook: ${recipe.cook_time}</span>` : ''}
-            ${recipe.servings ? `<span>Serves: ${recipe.servings}</span>` : ''}
+            ${recipe.prep_time ? `<span>Prep: ${UI.esc(recipe.prep_time)}</span>` : ''}
+            ${recipe.cook_time ? `<span>Cook: ${UI.esc(recipe.cook_time)}</span>` : ''}
+            ${recipe.servings ? `<span>Serves: ${UI.esc(recipe.servings)}</span>` : ''}
           </div>
         </div>
         <div class="recipe-section">
           <div class="recipe-section-title">Ingredients</div>
           <ul class="recipe-list">
-            ${recipe.ingredients.map(ing => `<li>${ing}</li>`).join('')}
+            ${recipe.ingredients.map(ing => `<li>${UI.esc(ing)}</li>`).join('')}
           </ul>
         </div>
         <div class="recipe-section">
           <div class="recipe-section-title">Instructions</div>
           <ol class="recipe-steps">
-            ${recipe.steps.map(step => `<li>${step}</li>`).join('')}
+            ${recipe.steps.map(step => `<li>${UI.esc(step)}</li>`).join('')}
           </ol>
         </div>
         ${recipe.tips ? `
           <div class="recipe-section">
             <div class="recipe-section-title">Coach Tips</div>
-            <div class="recipe-tips">${recipe.tips}</div>
+            <div class="recipe-tips">${UI.esc(recipe.tips)}</div>
           </div>
         ` : ''}
         <div class="recipe-macros-summary">

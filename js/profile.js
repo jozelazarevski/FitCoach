@@ -216,6 +216,14 @@ const Profile = {
             <option value="anthropic" ${profile.apiProvider === 'anthropic' ? 'selected' : ''}>Claude (Anthropic)</option>
           </select>
         </div>
+        <div class="form-group" id="claude-model-group" style="${profile.apiProvider === 'anthropic' ? '' : 'display:none'}">
+          <label class="form-label">Claude Model</label>
+          <select class="form-select" id="inp-claude-model">
+            <option value="claude-haiku-4-5-20251001" ${profile.claudeModel === 'claude-haiku-4-5-20251001' ? 'selected' : ''}>Claude Haiku 4.5 (fast, cheap)</option>
+            <option value="claude-sonnet-4-6" ${profile.claudeModel === 'claude-sonnet-4-6' ? 'selected' : ''}>Claude Sonnet 4.6 (balanced)</option>
+            <option value="claude-opus-4-6" ${profile.claudeModel === 'claude-opus-4-6' ? 'selected' : ''}>Claude Opus 4.6 (most capable)</option>
+          </select>
+        </div>
         <div class="form-group">
           <label class="form-label">API Key</label>
           <div class="api-key-wrap">
@@ -287,6 +295,11 @@ const Profile = {
       UI.$('#inp-height').previousElementSibling.textContent = `Height (${hLabel})`;
     });
 
+    UI.$('#inp-provider')?.addEventListener('change', e => {
+      const group = UI.$('#claude-model-group');
+      if (group) group.style.display = e.target.value === 'anthropic' ? '' : 'none';
+    });
+
     UI.$('#toggle-key')?.addEventListener('click', () => {
       const inp = UI.$('#inp-apikey');
       inp.type = inp.type === 'password' ? 'text' : 'password';
@@ -334,7 +347,8 @@ const Profile = {
       goal: UI.$('#goal-pills .goal-pill.active')?.dataset.val || 'fat_loss',
       healthConditions: Array.from(UI.$$('#health-pills .health-pill.active')).map(p => p.dataset.val),
       apiProvider: UI.$('#inp-provider')?.value || 'openai',
-      apiKey: UI.$('#inp-apikey')?.value || ''
+      apiKey: UI.$('#inp-apikey')?.value || '',
+      claudeModel: UI.$('#inp-claude-model')?.value || 'claude-haiku-4-5-20251001'
     };
   },
 
@@ -461,6 +475,14 @@ const Profile = {
               <option value="anthropic">Claude (Anthropic)</option>
             </select>
           </div>
+          <div class="form-group" id="ob-claude-model-group" style="display:none">
+            <label class="form-label">Claude Model</label>
+            <select class="form-select" id="ob-claude-model">
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast, cheap)</option>
+              <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (balanced)</option>
+              <option value="claude-opus-4-6">Claude Opus 4.6 (most capable)</option>
+            </select>
+          </div>
           <div class="form-group">
             <label class="form-label">API Key</label>
             <input type="password" class="form-input" id="ob-apikey" placeholder="Your API key">
@@ -485,6 +507,11 @@ const Profile = {
       });
     });
 
+    UI.$('#ob-provider')?.addEventListener('change', e => {
+      const group = UI.$('#ob-claude-model-group');
+      if (group) group.style.display = e.target.value === 'anthropic' ? '' : 'none';
+    });
+
     UI.$('#btn-onboard').addEventListener('click', () => {
       const w = parseFloat(UI.$('#ob-weight').value);
       const h = parseFloat(UI.$('#ob-height').value);
@@ -501,6 +528,7 @@ const Profile = {
         goal: UI.$('#ob-goal .goal-pill.active')?.dataset.val || 'fat_loss',
         apiProvider: UI.$('#ob-provider').value,
         apiKey: key,
+        claudeModel: UI.$('#ob-claude-model')?.value || 'claude-haiku-4-5-20251001',
         unit: 'metric'
       };
 

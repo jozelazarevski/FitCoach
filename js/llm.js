@@ -1,7 +1,7 @@
 const LLM = {
   async call(messages, profile, maxTokens = 1500) {
     if (profile.apiProvider === 'anthropic') {
-      return this._callClaude(messages, profile.apiKey, maxTokens);
+      return this._callClaude(messages, profile.apiKey, profile.claudeModel, maxTokens);
     }
     return this._callOpenAI(messages, profile.apiKey, maxTokens);
   },
@@ -30,7 +30,10 @@ const LLM = {
     return data.choices[0].message.content;
   },
 
-  async _callClaude(messages, apiKey, maxTokens = 1500) {
+  async _callClaude(messages, apiKey, claudeModel, maxTokens = 1500) {
+    const key = (apiKey || '').trim();
+    if (!key) throw new Error('API key is missing. Set it in Profile settings.');
+
     const systemMsg = messages.find(m => m.role === 'system')?.content || '';
     const userMsgs = messages.filter(m => m.role !== 'system');
 
@@ -38,12 +41,12 @@ const LLM = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
+        'x-api-key': key,
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: claudeModel || 'claude-haiku-4-5-20251001',
         max_tokens: maxTokens,
         system: systemMsg,
         messages: userMsgs.map(m => ({ role: m.role, content: m.content }))
@@ -81,6 +84,7 @@ Rules:
 - sugar_processed = sugars from added/refined sources (white sugar, HFCS, syrups, candy, soda, packaged foods)
 - If unsure, classify as processed`;
 
+    const apiKey = (profile.apiKey || '').trim();
     let response;
     if (profile.apiProvider === 'anthropic') {
       const mediaType = base64Image.startsWith('/9j/') ? 'image/jpeg' : 'image/png';
@@ -88,12 +92,12 @@ Rules:
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': profile.apiKey,
+          'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
           'anthropic-dangerous-direct-browser-access': 'true'
         },
         body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
+          model: profile?.claudeModel || 'claude-haiku-4-5-20251001',
           max_tokens: 1500,
           system: systemPrompt,
           messages: [{
@@ -116,7 +120,7 @@ Rules:
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${profile.apiKey}`
+          'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
           model: 'gpt-4o-mini',
