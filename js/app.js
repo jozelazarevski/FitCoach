@@ -3,6 +3,13 @@ const App = {
   historyMonth: new Date(),
 
   init() {
+    // Auth gate: require login before anything
+    if (!Auth.isLoggedIn()) {
+      Auth.renderAuthScreen();
+      this.bindNav();
+      return;
+    }
+
     if (!Store.isProfileComplete()) {
       Profile.renderOnboarding();
     }

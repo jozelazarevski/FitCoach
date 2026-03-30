@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fitcoach-v13';
+const CACHE_NAME = 'fitcoach-v14';
 const API_CACHE = 'fitcoach-api-v1';
 const API_CACHE_MAX_AGE = 5 * 60 * 1000; // 5 minutes
 
@@ -7,6 +7,7 @@ const ASSETS = [
   '/css/style.css',
   '/js/app.js',
   '/js/storage.js',
+  '/js/auth.js',
   '/js/llm.js',
   '/js/tracker.js',
   '/js/recipes.js',

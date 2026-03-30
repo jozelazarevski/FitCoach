@@ -86,6 +86,26 @@ CREATE TABLE IF NOT EXISTS generation_queue (
 
 CREATE INDEX IF NOT EXISTS idx_queue_batch_status ON generation_queue(batch_id, status);
 
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    profile_data TEXT DEFAULT '{}',
+    user_data TEXT DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+
 CREATE TABLE IF NOT EXISTS admin_sessions (
     token TEXT PRIMARY KEY,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -142,7 +162,8 @@ def init_db():
 def _run_maintenance():
     """Run periodic maintenance: purge old sessions, optimize, checkpoint WAL."""
     with use_db() as conn:
-        # Purge admin sessions older than 7 days
+        # Purge sessions older than 30 days (users) and 7 days (admin)
+        conn.execute("DELETE FROM user_sessions WHERE created_at < datetime('now', '-30 days')")
         conn.execute("DELETE FROM admin_sessions WHERE created_at < datetime('now', '-7 days')")
         conn.commit()
         # Optimize query planner statistics

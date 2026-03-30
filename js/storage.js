@@ -49,12 +49,19 @@ const Store = {
     }
   },
 
+  _syncTimer: null,
+
   save(data) {
     const raw = JSON.stringify(data);
     localStorage.setItem(this.KEY, raw);
     // Update cache directly — avoid re-parsing on next load()
     this._cache = data;
     this._cacheRaw = raw;
+    // Debounced sync to server (5s after last save)
+    if (typeof Auth !== 'undefined' && Auth.isLoggedIn()) {
+      clearTimeout(this._syncTimer);
+      this._syncTimer = setTimeout(() => Auth.syncData(), 5000);
+    }
   },
 
   getProfile() {
@@ -156,7 +163,7 @@ const Store = {
 
   isProfileComplete() {
     const p = this.getProfile();
-    return p.weight > 0 && p.height > 0 && p.age > 0 && p.apiKey;
+    return p.weight > 0 && p.height > 0 && p.age > 0;
   },
 
   getPreferences() {

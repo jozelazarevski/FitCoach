@@ -10,6 +10,7 @@ from flask import Flask, send_from_directory, jsonify, request
 from backend.db import init_db
 from backend.api.recipes import recipes_bp
 from backend.api.admin import admin_bp
+from backend.api.auth import auth_bp
 import os
 
 # Allowed static directories - never serve project root directly
@@ -20,6 +21,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'fitcoach-dev-key')
 
 # Register API blueprints
+app.register_blueprint(auth_bp, url_prefix='/api/auth')
 app.register_blueprint(recipes_bp, url_prefix='/api/recipes')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
 
@@ -29,7 +31,7 @@ app.register_blueprint(admin_bp, url_prefix='/api/admin')
 def add_cors_headers(response):
     if request.path.startswith('/api/'):
         response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Admin-Token'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-Admin-Token, Authorization'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     return response
 
