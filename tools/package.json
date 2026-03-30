@@ -1,0 +1,12 @@
+{
+  "name": "fitcoach-tools",
+  "private": true,
+  "description": "Build tools for FitCoach",
+  "scripts": {
+    "build-db": "node build-db.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "csv-parse": "^5.5.0"
+  }
+}

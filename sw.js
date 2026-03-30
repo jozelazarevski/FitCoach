@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fitcoach-v5';
+const CACHE_NAME = 'fitcoach-v6';
 const ASSETS = [
   '/index.html',
   '/css/style.css',
@@ -10,11 +10,21 @@ const ASSETS = [
   '/js/profile.js',
   '/js/ui.js',
   '/js/body.js',
+  '/js/db.js',
+  '/data/recipes.db',
   '/manifest.json'
+];
+const CDN_ASSETS = [
+  'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.wasm'
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(ASSETS)));
+  e.waitUntil(
+    caches.open(CACHE_NAME).then(c =>
+      c.addAll(ASSETS).then(() => c.addAll(CDN_ASSETS).catch(() => {}))
+    )
+  );
   self.skipWaiting();
 });
 
