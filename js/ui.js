@@ -2,6 +2,13 @@ const UI = {
   $(sel) { return document.querySelector(sel); },
   $$(sel) { return document.querySelectorAll(sel); },
 
+  esc(str) {
+    if (!str && str !== 0) return '';
+    const d = document.createElement('div');
+    d.textContent = String(str);
+    return d.innerHTML;
+  },
+
   show(el) { if (typeof el === 'string') el = this.$(el); el?.classList.add('show'); },
   hide(el) { if (typeof el === 'string') el = this.$(el); el?.classList.remove('show'); },
 

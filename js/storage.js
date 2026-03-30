@@ -18,6 +18,7 @@ const Store = {
         customMacros: false,
         apiProvider: 'openai',
         apiKey: '',
+        claudeModel: 'claude-haiku-4-5-20251001',
         unit: 'metric',
         healthConditions: []
       },
@@ -65,7 +66,14 @@ const Store = {
   },
 
   getProfile() {
-    return this.load().profile;
+    const profile = this.load().profile;
+    // Apply config.js defaults if API key not set in profile
+    if (typeof CONFIG !== 'undefined') {
+      if (!profile.apiKey && CONFIG.apiKey) profile.apiKey = CONFIG.apiKey;
+      if (CONFIG.apiProvider && !profile.apiKey) profile.apiProvider = CONFIG.apiProvider;
+      if (CONFIG.claudeModel && !profile.claudeModel) profile.claudeModel = CONFIG.claudeModel;
+    }
+    return profile;
   },
 
   saveProfile(profile) {

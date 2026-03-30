@@ -213,7 +213,7 @@ const App = {
       const options = result.options || result.suggestions || [];
       container.innerHTML = `
         <div class="gap-advice-content">
-          ${result.assessment ? `<div class="gap-assessment">${result.assessment}</div>` : ''}
+          ${result.assessment ? `<div class="gap-assessment">${UI.esc(result.assessment)}</div>` : ''}
           <div class="gap-options">
             ${options.map((opt, i) => {
               const isSupplement = (opt.type || '').toLowerCase().includes('supplement');
@@ -223,15 +223,15 @@ const App = {
                   <span class="gap-option-rank">${i + 1}</span>
                   <span class="gap-option-type">${isSupplement ? 'Supplement' : 'Whole Food'}</span>
                 </div>
-                <div class="gap-option-name">${opt.name || 'Option'}</div>
-                <div class="gap-option-desc">${opt.description || ''}</div>
+                <div class="gap-option-name">${UI.esc(opt.name || 'Option')}</div>
+                <div class="gap-option-desc">${UI.esc(opt.description || '')}</div>
                 <div class="gap-option-macros">
                   <span style="color:var(--cal-color)">${opt.calories || 0} cal</span>
                   <span style="color:var(--protein-color)">${opt.protein || 0}g P</span>
                   <span style="color:var(--carb-color)">${opt.carbs || 0}g C</span>
                   <span style="color:var(--fat-color)">${opt.fat || 0}g F</span>
                 </div>
-                ${opt.tip ? `<div class="gap-option-tip">${opt.tip}</div>` : ''}
+                ${opt.tip ? `<div class="gap-option-tip">${UI.esc(opt.tip)}</div>` : ''}
                 <div class="gap-option-btns">
                   <button class="btn btn-log-option" data-index="${i}">I had this - log it</button>
                   <button class="btn btn-decline-option" data-index="${i}" title="Don't suggest this again" style="background:transparent;border:1px solid var(--border);color:var(--text-dim);padding:8px 12px;font-size:12px">&#10005; Not for me</button>
@@ -369,7 +369,7 @@ const App = {
             <div class="meal-card-header">
               <span class="meal-time">${UI.formatTime(meal.time)}</span>
             </div>
-            <div class="meal-name">${meal.description || meal.items?.map(i => i.name).join(', ')}</div>
+            <div class="meal-name">${UI.esc(meal.description || meal.items?.map(i => i.name).join(', '))}</div>
             <div class="meal-macros">
               <span>${UI.macroDot('cal')} ${meal.total.calories} cal</span>
               <span>${UI.macroDot('protein')} ${meal.total.protein}g P</span>

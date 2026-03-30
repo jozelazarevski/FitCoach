@@ -143,9 +143,10 @@ const Tracker = {
 
   _fileToBase64(file) {
     return new Promise((resolve, reject) => {
-      // Resize image to save bandwidth
       const img = new Image();
+      const objUrl = URL.createObjectURL(file);
       img.onload = () => {
+        URL.revokeObjectURL(objUrl);
         const canvas = document.createElement('canvas');
         const maxSize = 1024;
         let w = img.width, h = img.height;
@@ -159,8 +160,8 @@ const Tracker = {
         const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
         resolve(dataUrl.split(',')[1]);
       };
-      img.onerror = reject;
-      img.src = URL.createObjectURL(file);
+      img.onerror = () => { URL.revokeObjectURL(objUrl); reject(new Error('Failed to load image')); };
+      img.src = objUrl;
     });
   },
 
@@ -429,7 +430,7 @@ const Tracker = {
         <div class="card-title">Parsed Items</div>
         ${result.items.map((item, i) => `
           <div class="parse-item">
-            <span class="parse-item-name">${item.name}</span>
+            <span class="parse-item-name">${UI.esc(item.name)}</span>
             <div class="parse-item-macros">
               <span>${item.calories} cal</span>
               <span>${item.protein}g P</span>
@@ -496,7 +497,7 @@ const Tracker = {
           <span class="meal-time">${UI.formatTime(meal.time)}</span>
           <button class="meal-delete" data-index="${i}" title="Delete">&times;</button>
         </div>
-        <div class="meal-name">${meal.description || meal.items?.map(it => it.name).join(', ')}</div>
+        <div class="meal-name">${UI.esc(meal.description || meal.items?.map(it => it.name).join(', '))}</div>
         <div class="meal-macros">
           <span>${UI.macroDot('cal')} ${meal.total.calories} cal</span>
           <span>${UI.macroDot('protein')} ${meal.total.protein}g P</span>

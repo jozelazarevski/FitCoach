@@ -1,8 +1,13 @@
 const Coach = {
   selectedMealTypes: [],
   selectedDietFilters: [],
+  selectedCuisine: '',
+  selectedDifficulty: '',
+  selectedMaxTime: 0,
   customRequest: '',
   lastSuggestions: null,
+  lastRecipeResults: null,
+  _dbReady: false,
 
   renderCoachScreen() {
     const profile = Store.getProfile();
@@ -68,6 +73,35 @@ const Coach = {
       </div>
 
       <div class="card">
+        <div class="card-title">Cuisine (optional)</div>
+        <div class="meal-type-pills" id="cuisine-filter-pills"></div>
+      </div>
+
+      <div class="card filter-collapse-wrap">
+        <button class="filter-collapse-toggle" id="btn-more-filters">More Filters <span class="toggle-arrow">&#9662;</span></button>
+        <div class="filter-collapse-content" id="more-filters">
+          <div style="margin-bottom:12px">
+            <div class="card-title" style="margin-bottom:8px">Max Cook Time</div>
+            <div class="meal-type-pills" id="time-filter-pills">
+              <button class="meal-type-pill time-pill" data-time="15">Under 15 min</button>
+              <button class="meal-type-pill time-pill" data-time="30">Under 30 min</button>
+              <button class="meal-type-pill time-pill" data-time="60">Under 60 min</button>
+              <button class="meal-type-pill time-pill active" data-time="0">Any</button>
+            </div>
+          </div>
+          <div>
+            <div class="card-title" style="margin-bottom:8px">Difficulty</div>
+            <div class="meal-type-pills" id="difficulty-filter-pills">
+              <button class="meal-type-pill diff-pill" data-diff="easy">Easy</button>
+              <button class="meal-type-pill diff-pill" data-diff="medium">Medium</button>
+              <button class="meal-type-pill diff-pill" data-diff="hard">Hard</button>
+              <button class="meal-type-pill diff-pill active" data-diff="">Any</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-title">Extra Instructions (optional)</div>
         <input type="text" class="food-input" id="coach-custom" placeholder="e.g. quick to prepare, no fish, under 10 min...">
       </div>
@@ -84,9 +118,14 @@ const Coach = {
         ${Store.getPantry().length > 0 ? `<label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:var(--text-dim);cursor:pointer"><input type="checkbox" id="chk-pantry-only"> Only suggest meals I can make with these ingredients</label>` : ''}
       </div>
 
-      <button class="btn btn-coach" id="btn-suggest" disabled>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      <button class="btn btn-coach" id="btn-find-recipes" disabled>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
         Pick a meal type first
+      </button>
+
+      <button class="btn btn-outline btn-full" id="btn-ai-suggest" style="margin-top:8px" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        Ask AI Coach for personalized suggestions
       </button>
 
       <button class="btn btn-outline btn-full" id="btn-meal-plan" style="margin-top:8px">
@@ -120,10 +159,18 @@ const Coach = {
 
     this._bindMealTypePills();
     this._bindDietFilters();
+    this._bindCuisineFilters();
+    this._bindExtraFilters();
     this._bindPrefRemove();
     this._bindPantry();
-    UI.$('#btn-suggest').addEventListener('click', () => this.getSuggestion());
+    UI.$('#btn-find-recipes')?.addEventListener('click', () => this.findRecipes());
+    UI.$('#btn-ai-suggest')?.addEventListener('click', () => this.getSuggestion());
     UI.$('#btn-meal-plan')?.addEventListener('click', () => this.generateMealPlan());
+    UI.$('#btn-more-filters')?.addEventListener('click', () => {
+      const content = UI.$('#more-filters');
+      content.classList.toggle('show');
+      UI.$('#btn-more-filters .toggle-arrow').textContent = content.classList.contains('show') ? '\u25B4' : '\u25BE';
+    });
   },
 
   _bindMealTypePills() {
@@ -141,21 +188,24 @@ const Coach = {
       if (!pill) return;
       pill.classList.toggle('active');
 
-      this.selectedMealTypes = Array.from(UI.$$('.meal-type-pill.active')).map(p => p.dataset.type);
+      this.selectedMealTypes = Array.from(UI.$$('#meal-type-pills .meal-type-pill.active')).map(p => p.dataset.type);
 
-      const btn = UI.$('#btn-suggest');
+      const btnRecipes = UI.$('#btn-find-recipes');
+      const btnAI = UI.$('#btn-ai-suggest');
       if (this.selectedMealTypes.length === 0) {
-        btn.disabled = true;
-        btn.innerHTML = `
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        btnRecipes.disabled = true;
+        btnAI.disabled = true;
+        btnRecipes.innerHTML = `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
           Pick a meal type first
         `;
       } else {
-        btn.disabled = false;
+        btnRecipes.disabled = false;
+        btnAI.disabled = false;
         const selected = this.selectedMealTypes.map(t => labels[t]).join(' + ');
-        btn.innerHTML = `
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-          Suggest ${selected}
+        btnRecipes.innerHTML = `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+          Find ${selected} Recipes
         `;
       }
     });
@@ -203,6 +253,283 @@ const Coach = {
     });
   },
 
+  async _bindCuisineFilters() {
+    try {
+      await RecipeDB.init();
+      const cuisines = RecipeDB.getDistinctValues('cuisine');
+      const container = UI.$('#cuisine-filter-pills');
+      if (!container) return;
+      container.innerHTML = cuisines.map(c =>
+        `<button class="meal-type-pill cuisine-pill" data-cuisine="${c}">${c}</button>`
+      ).join('');
+      container.addEventListener('click', e => {
+        const pill = e.target.closest('.cuisine-pill');
+        if (!pill) return;
+        const wasActive = pill.classList.contains('active');
+        UI.$$('.cuisine-pill').forEach(p => p.classList.remove('active'));
+        if (!wasActive) pill.classList.add('active');
+        this.selectedCuisine = wasActive ? '' : pill.dataset.cuisine;
+      });
+      this._dbReady = true;
+    } catch {
+      UI.$('#cuisine-filter-pills').innerHTML = '<span style="color:var(--text-dim);font-size:12px">Recipe DB not loaded. Run build script first.</span>';
+    }
+  },
+
+  _bindExtraFilters() {
+    UI.$('#time-filter-pills')?.addEventListener('click', e => {
+      const pill = e.target.closest('.time-pill');
+      if (!pill) return;
+      UI.$$('.time-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      this.selectedMaxTime = parseInt(pill.dataset.time) || 0;
+    });
+    UI.$('#difficulty-filter-pills')?.addEventListener('click', e => {
+      const pill = e.target.closest('.diff-pill');
+      if (!pill) return;
+      UI.$$('.diff-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      this.selectedDifficulty = pill.dataset.diff || '';
+    });
+  },
+
+  async findRecipes() {
+    if (this.selectedMealTypes.length === 0) {
+      UI.toast('Pick at least one meal type', 'error');
+      return;
+    }
+
+    if (!this._dbReady) {
+      UI.showLoading('Loading recipe database...');
+      try {
+        await RecipeDB.init();
+        this._dbReady = true;
+      } catch (err) {
+        UI.hideLoading();
+        UI.toast('Recipe database not available. Run the build script first.', 'error');
+        return;
+      }
+      UI.hideLoading();
+    }
+
+    const profile = Store.getProfile();
+    const totals = Store.getTodayTotals();
+    const remaining = {
+      calories: Math.max(0, profile.macros.calories - totals.calories),
+      protein: Math.max(0, profile.macros.protein - totals.protein),
+      carbs: Math.max(0, profile.macros.carbs - totals.carbs),
+      fat: Math.max(0, profile.macros.fat - totals.fat)
+    };
+
+    const prefs = Store.getPreferences();
+    const pantry = Store.getPantry();
+    const pantryOnly = UI.$('#chk-pantry-only')?.checked || false;
+    const textSearch = UI.$('#coach-custom')?.value.trim() || '';
+
+    // Map health conditions to allergen exclusions
+    const allergenMap = {
+      nut_allergy: 'tree_nuts',
+      shellfish_allergy: 'shellfish',
+      egg_allergy: 'egg',
+      soy_allergy: 'soy',
+      lactose_intolerant: 'dairy',
+      celiac: 'gluten'
+    };
+    const excludeAllergens = (profile.healthConditions || [])
+      .map(c => allergenMap[c]).filter(Boolean);
+
+    // Map goal to tag_goal
+    const goalTagMap = {
+      fat_loss: 'fat_loss',
+      aggressive_fat_loss: 'cutting',
+      muscle_gain: 'muscle_building',
+      lean_bulk: 'bulking',
+      maintain: 'maintenance',
+      recomp: 'fat_loss'
+    };
+
+    const filters = {
+      mealTypes: this.selectedMealTypes,
+      dietFilters: this.selectedDietFilters,
+      cuisine: this.selectedCuisine || undefined,
+      difficulty: this.selectedDifficulty || undefined,
+      maxTime: this.selectedMaxTime || undefined,
+      textSearch: textSearch || undefined,
+      excludeAllergens: excludeAllergens.length > 0 ? excludeAllergens : undefined,
+      tagGoal: goalTagMap[profile.goal] || undefined
+    };
+
+    const recipes = RecipeDB.findMacroFit(remaining, filters);
+
+    if (recipes.length === 0) {
+      // Retry without tagGoal for broader results
+      delete filters.tagGoal;
+      const broader = RecipeDB.findMacroFit(remaining, filters);
+      if (broader.length === 0) {
+        UI.toast('No recipes match your filters. Try relaxing some filters.', 'error');
+        return;
+      }
+      this.lastRecipeResults = broader;
+      this.showRecipeResults(broader);
+      return;
+    }
+
+    // Filter out disliked foods
+    const filtered = recipes.filter(r =>
+      !prefs.disliked.some(d => r.name.toLowerCase().includes(d.toLowerCase()))
+    );
+
+    this.lastRecipeResults = filtered.length > 0 ? filtered : recipes;
+    this.showRecipeResults(this.lastRecipeResults);
+  },
+
+  showRecipeResults(recipes) {
+    const container = UI.$('#coach-results');
+    container.innerHTML = `
+      <div class="recipe-results-header">
+        <span class="recipe-results-count">${recipes.length} recipes found</span>
+      </div>
+      ${recipes.map((r, i) => `
+        <div class="suggestion-card ${i === 0 ? 'top-pick' : ''}" id="db-recipe-${r.id}">
+          ${i === 0 ? '<div class="suggestion-rank-badge">#1 Best Macro Fit</div>' : `<div class="suggestion-rank-badge">#${i + 1}</div>`}
+          <div class="recipe-badges">
+            <span class="recipe-badge">${r.cuisine}</span>
+            <span class="recipe-badge">${r.difficulty}</span>
+            <span class="recipe-badge">${r.total_time_min} min</span>
+            ${r.meal_prep_friendly ? '<span class="recipe-badge badge-prep">Meal Prep</span>' : ''}
+          </div>
+          <div class="suggestion-header">
+            <div class="suggestion-title">${r.name}</div>
+            <div class="suggestion-actions">
+              <button class="sug-btn sug-like" data-recipe-id="${r.id}" title="I like this kind of food">&#9829;</button>
+              <button class="sug-btn sug-discard" data-recipe-id="${r.id}" title="Not for me">&#10005;</button>
+            </div>
+          </div>
+          <div class="suggestion-desc">${r.description}</div>
+          <div class="suggestion-macros">
+            <span style="color:var(--cal-color)">${r.calories} cal</span>
+            <span style="color:var(--protein-color)">${r.protein_g}g P</span>
+            <span style="color:var(--carb-color)">${r.carbs_g}g C</span>
+            <span style="color:var(--fat-color)">${r.fat_g}g F</span>
+            ${r.fiber_g ? `<span style="color:#56ab2f">${r.fiber_g}g fiber</span>` : ''}
+          </div>
+          <div class="recipe-tags">
+            ${r.diet.map(d => `<span class="recipe-diet-tag">${d.replace(/_/g, ' ')}</span>`).join('')}
+          </div>
+          <div class="suggestion-btn-row">
+            <button class="btn btn-recipe" data-recipe-id="${r.id}">View Recipe</button>
+            <button class="btn btn-log-suggestion" data-recipe-id="${r.id}">I ate this</button>
+          </div>
+          <div class="recipe-content" id="recipe-db-${r.id}"></div>
+        </div>
+      `).join('')}
+      <div style="margin-top:8px">
+        <button class="btn btn-outline btn-full" id="btn-refresh-recipes">Find different recipes</button>
+      </div>
+    `;
+
+    this._bindRecipeResultActions();
+    UI.$('#btn-refresh-recipes')?.addEventListener('click', () => this.findRecipes());
+  },
+
+  _bindRecipeResultActions() {
+    // Like
+    UI.$$('#coach-results .sug-like').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const id = parseInt(btn.dataset.recipeId);
+        const recipe = this.lastRecipeResults?.find(r => r.id === id);
+        if (!recipe) return;
+        Store.addPreference('liked', recipe.name);
+        btn.classList.add('liked-active');
+        UI.toast(`Noted: you like "${recipe.name}"`, 'success');
+      });
+    });
+
+    // Dislike
+    UI.$$('#coach-results .sug-discard').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const id = parseInt(btn.dataset.recipeId);
+        const recipe = this.lastRecipeResults?.find(r => r.id === id);
+        if (!recipe) return;
+        Store.addPreference('disliked', recipe.name);
+        const card = UI.$(`#db-recipe-${id}`);
+        card.classList.add('discarded');
+        setTimeout(() => { card.style.display = 'none'; }, 300);
+        UI.toast(`Got it, won't suggest "${recipe.name}" again`, '');
+      });
+    });
+
+    // View Recipe (from DB - instant, no LLM call)
+    UI.$$('#coach-results .btn-recipe').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const id = parseInt(btn.dataset.recipeId);
+        const container = UI.$(`#recipe-db-${id}`);
+        if (container.classList.contains('show')) {
+          container.classList.remove('show');
+          btn.textContent = 'View Recipe';
+          return;
+        }
+        const recipe = RecipeDB.getRecipeById(id);
+        if (!recipe) return;
+        container.innerHTML = this._renderRecipe({
+          name: recipe.name,
+          prep_time: recipe.prep_time_min + ' min',
+          cook_time: recipe.cook_time_min + ' min',
+          servings: String(recipe.servings),
+          ingredients: recipe.ingredients.map(i => `${i.amount} ${i.item}`),
+          steps: recipe.steps,
+          tips: recipe.tips,
+          calories: recipe.calories,
+          protein: recipe.protein_g,
+          carbs: recipe.carbs_g,
+          fat: recipe.fat_g
+        });
+        container.classList.add('show');
+        btn.textContent = 'Hide Recipe';
+      });
+    });
+
+    // Log meal from recipe
+    UI.$$('#coach-results .btn-log-suggestion').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const id = parseInt(btn.dataset.recipeId);
+        const recipe = this.lastRecipeResults?.find(r => r.id === id);
+        if (!recipe) return;
+        Store.addMeal({
+          time: new Date().toISOString(),
+          description: recipe.name,
+          items: [{
+            name: recipe.name,
+            calories: recipe.calories || 0,
+            protein: recipe.protein_g || 0,
+            carbs: recipe.carbs_g || 0,
+            fat: recipe.fat_g || 0,
+            sugar_natural: 0,
+            sugar_processed: recipe.sugar_g || 0,
+            fiber: recipe.fiber_g || 0
+          }],
+          total: {
+            calories: recipe.calories || 0,
+            protein: recipe.protein_g || 0,
+            carbs: recipe.carbs_g || 0,
+            fat: recipe.fat_g || 0,
+            sugar_natural: 0,
+            sugar_processed: recipe.sugar_g || 0,
+            fiber: recipe.fiber_g || 0
+          }
+        });
+        btn.textContent = 'Logged!';
+        btn.disabled = true;
+        btn.classList.add('logged');
+        UI.toast(`${recipe.name} logged!`, 'success');
+      });
+    });
+  },
+
   async getSuggestion() {
     const profile = Store.getProfile();
     if (this.selectedMealTypes.length === 0) {
@@ -237,8 +564,8 @@ const Coach = {
   showSuggestions(result) {
     const container = UI.$('#coach-results');
     container.innerHTML = `
-      ${result.top_pick_reason ? `<div class="top-pick-banner"><div class="top-pick-label">Why #1 is your best pick right now</div><div class="top-pick-text">${result.top_pick_reason}</div></div>` : ''}
-      ${result.reasoning ? `<div class="coach-reasoning">${result.reasoning}</div>` : ''}
+      ${result.top_pick_reason ? `<div class="top-pick-banner"><div class="top-pick-label">Why #1 is your best pick right now</div><div class="top-pick-text">${UI.esc(result.top_pick_reason)}</div></div>` : ''}
+      ${result.reasoning ? `<div class="coach-reasoning">${UI.esc(result.reasoning)}</div>` : ''}
       ${result.suggestions.map((s, i) => `
         <div class="suggestion-card ${i === 0 ? 'top-pick' : ''}" id="suggestion-${i}">
           <div class="suggestion-rank-badge">
@@ -246,14 +573,14 @@ const Coach = {
             <span class="sug-source ${s.source === 'llm' ? 'sug-source-llm' : 'sug-source-db'}">${s.source === 'llm' ? 'LLM' : 'DB'}</span>
           </div>
           <div class="suggestion-header">
-            <div class="suggestion-title">${s.name}</div>
+            <div class="suggestion-title">${UI.esc(s.name)}</div>
             <div class="suggestion-actions">
               <button class="sug-btn sug-like" data-index="${i}" title="I like this kind of food">&#9829;</button>
               <button class="sug-btn sug-discard" data-index="${i}" title="Not for me">&#10005;</button>
             </div>
           </div>
-          ${s.why ? `<div class="suggestion-why">${s.why}</div>` : ''}
-          <div class="suggestion-desc">${s.description}</div>
+          ${s.why ? `<div class="suggestion-why">${UI.esc(s.why)}</div>` : ''}
+          <div class="suggestion-desc">${UI.esc(s.description)}</div>
           <div class="suggestion-macros">
             <span style="color:var(--cal-color)">${s.calories} cal</span>
             <span style="color:var(--protein-color)">${s.protein}g P</span>
@@ -434,6 +761,27 @@ const Coach = {
                 <span style="color:var(--protein-color)">${m.protein}gP</span>
                 <span style="color:var(--carb-color)">${m.carbs}gC</span>
                 <span style="color:var(--fat-color)">${m.fat}gF</span>
+      const response = await LLM.call(messages, profile, 4000);
+      const cleaned = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const result = JSON.parse(cleaned);
+
+      const container = UI.$('#coach-results');
+      container.innerHTML = `
+        <div class="card-title" style="margin-bottom:12px">Your Weekly Meal Plan</div>
+        ${result.plan.map(day => `
+          <div class="card meal-plan-day">
+            <div class="meal-plan-day-title">${UI.esc(day.day)}</div>
+            ${day.meals.map(m => `
+              <div class="meal-plan-item">
+                <div class="meal-plan-type">${UI.esc(m.type)}</div>
+                <div class="meal-plan-name">${UI.esc(m.name)}</div>
+                <div class="meal-plan-desc">${UI.esc(m.description)}</div>
+                <div class="suggestion-macros" style="margin-top:4px">
+                  <span style="color:var(--cal-color)">${m.calories}cal</span>
+                  <span style="color:var(--protein-color)">${m.protein}gP</span>
+                  <span style="color:var(--carb-color)">${m.carbs}gC</span>
+                  <span style="color:var(--fat-color)">${m.fat}gF</span>
+                </div>
               </div>
             </div>
           `).join('')}
@@ -483,29 +831,29 @@ const Coach = {
     return `
       <div class="recipe-box">
         <div class="recipe-header">
-          <div class="recipe-title">${recipe.name}</div>
+          <div class="recipe-title">${UI.esc(recipe.name)}</div>
           <div class="recipe-meta">
-            ${recipe.prep_time ? `<span>Prep: ${recipe.prep_time}</span>` : ''}
-            ${recipe.cook_time ? `<span>Cook: ${recipe.cook_time}</span>` : ''}
-            ${recipe.servings ? `<span>Serves: ${recipe.servings}</span>` : ''}
+            ${recipe.prep_time ? `<span>Prep: ${UI.esc(recipe.prep_time)}</span>` : ''}
+            ${recipe.cook_time ? `<span>Cook: ${UI.esc(recipe.cook_time)}</span>` : ''}
+            ${recipe.servings ? `<span>Serves: ${UI.esc(recipe.servings)}</span>` : ''}
           </div>
         </div>
         <div class="recipe-section">
           <div class="recipe-section-title">Ingredients</div>
           <ul class="recipe-list">
-            ${recipe.ingredients.map(ing => `<li>${ing}</li>`).join('')}
+            ${recipe.ingredients.map(ing => `<li>${UI.esc(ing)}</li>`).join('')}
           </ul>
         </div>
         <div class="recipe-section">
           <div class="recipe-section-title">Instructions</div>
           <ol class="recipe-steps">
-            ${recipe.steps.map(step => `<li>${step}</li>`).join('')}
+            ${recipe.steps.map(step => `<li>${UI.esc(step)}</li>`).join('')}
           </ol>
         </div>
         ${recipe.tips ? `
           <div class="recipe-section">
             <div class="recipe-section-title">Coach Tips</div>
-            <div class="recipe-tips">${recipe.tips}</div>
+            <div class="recipe-tips">${UI.esc(recipe.tips)}</div>
           </div>
         ` : ''}
         <div class="recipe-macros-summary">
