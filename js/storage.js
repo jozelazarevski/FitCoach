@@ -20,7 +20,12 @@ const Store = {
         apiKey: '',
         claudeModel: 'claude-haiku-4-5-20251001',
         unit: 'metric',
-        healthConditions: []
+        healthConditions: [],
+        dietaryPreferences: {
+          dietaryStyle: [],
+          liked: [],
+          disliked: []
+        }
       },
       logs: {},
       preferences: {
@@ -42,7 +47,18 @@ const Store = {
       // Return cached version if localStorage hasn't changed
       if (this._cache && raw === this._cacheRaw) return this._cache;
       const data = JSON.parse(raw);
-      this._cache = { ...this._defaults(), ...data, profile: { ...this._defaults().profile, ...data.profile } };
+      const defaults = this._defaults();
+      this._cache = {
+        ...defaults, ...data,
+        profile: {
+          ...defaults.profile,
+          ...data.profile,
+          dietaryPreferences: {
+            ...defaults.profile.dietaryPreferences,
+            ...(data.profile?.dietaryPreferences || {})
+          }
+        }
+      };
       this._cacheRaw = raw;
       return this._cache;
     } catch {

@@ -830,6 +830,30 @@ html, body {
   margin-bottom: 32px;
 }
 
+/* Onboarding wizard steps */
+.ob-progress { text-align: center; }
+.ob-step-label { font-size: 12px; color: var(--text-dim); }
+.ob-nav { display: flex; gap: 12px; margin-top: 24px; }
+.ob-nav .btn-outline { flex: 0 0 auto; }
+.ob-nav .btn-full { flex: 1; }
+#ob-step-content { animation: fadeIn 0.3s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Post-onboarding assessment */
+.assessment-stats { display: flex; gap: 8px; text-align: center; }
+.assessment-stat { flex: 1; padding: 12px 4px; background: var(--card-bg); border-radius: 10px; border: 1px solid var(--border); }
+.assessment-stat-value { font-size: 22px; font-weight: 700; color: var(--text); }
+.assessment-stat-label { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+.assessment-stat-note { font-size: 11px; margin-top: 4px; }
+.assessment-list { display: flex; flex-direction: column; gap: 10px; }
+.assessment-item { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+.assessment-bullet { color: var(--primary); flex-shrink: 0; font-size: 8px; margin-top: 5px; }
+.assessment-step { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--primary); color: #fff; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+
+/* Coach context summary */
+.coach-context-summary { font-size: 12px; color: var(--text-dim); text-align: center; padding: 8px 12px; margin-bottom: 8px; }
+.coach-auto-note { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-style: italic; }
+
 /* Auth screens */
 .auth-container {
   max-width: 380px;

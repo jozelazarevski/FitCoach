@@ -390,9 +390,14 @@ def get_single_recipe(recipe_id):
 @recipes_bp.route('/suggest', methods=['POST'])
 def suggest():
     data = request.get_json() or {}
+    # Merge dietary_preferences into diet_filters
+    diet_filters = data.get('diet_filters', [])
+    dietary_prefs = data.get('dietary_preferences', [])
+    all_diet_filters = list(set(diet_filters + dietary_prefs))
+
     context = {
         'meal_types': data.get('meal_types', []),
-        'diet_filters': data.get('diet_filters', []),
+        'diet_filters': all_diet_filters,
         'goal': data.get('goal', ''),
         'remaining': data.get('remaining', {}),
         'liked': data.get('liked', []),

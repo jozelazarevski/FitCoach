@@ -133,6 +133,7 @@ const LLM = {
         body: JSON.stringify({
           meal_types: Array.isArray(mealTypes) ? mealTypes : [mealTypes],
           diet_filters: dietFilters || [],
+          dietary_preferences: profile.dietaryPreferences?.dietaryStyle || [],
           goal: profile.goal || '',
           remaining: remainingFull,
           liked: prefs.liked || [],
@@ -431,6 +432,7 @@ Rules:
         body: JSON.stringify({
           meal_types: Array.isArray(mealTypes) ? mealTypes : [mealTypes],
           diet_filters: dietFilters || [],
+          dietary_preferences: profile.dietaryPreferences?.dietaryStyle || [],
           goal: profile.goal || '',
           remaining,
           liked: prefs.liked || [],
