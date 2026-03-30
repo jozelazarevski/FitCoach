@@ -2,6 +2,7 @@ import json
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 import threading
 from flask import Blueprint, request, jsonify
@@ -15,6 +16,7 @@ from backend.tag_engine import detect_cuisine, compute_tags
 from backend.recipe_generator import (
     build_generation_plan, create_batch, run_generation, get_generation_status
 )
+from config import DB_PATH
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -383,3 +385,459 @@ def generation_status():
     if status is None:
         return jsonify({'error': 'Batch not found'}), 404
     return jsonify(status)
+
+
+# ---------------------------------------------------------------------------
+#  Advanced Admin Endpoints
+# ---------------------------------------------------------------------------
+
+
+@admin_bp.route('/users', methods=['GET'])
+def list_users():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        per_page = min(max(1, int(request.args.get('per_page', 50))), 200)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid pagination'}), 400
+
+    search = request.args.get('search', '')
+    with use_db() as db:
+        conditions = ["1=1"]
+        params = []
+        if search:
+            conditions.append("(email LIKE ? OR name LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        where = " AND ".join(conditions)
+
+        count = db.execute(f"SELECT COUNT(*) FROM users WHERE {where}", params).fetchone()[0]
+        offset = (page - 1) * per_page
+        rows = db.execute(
+            f"""SELECT id, email, name, created_at, updated_at,
+                       LENGTH(profile_data) as profile_size,
+                       LENGTH(user_data) as data_size
+                FROM users WHERE {where}
+                ORDER BY id DESC LIMIT ? OFFSET ?""",
+            params + [per_page, offset]
+        ).fetchall()
+
+        # Get session counts per user
+        user_ids = [r['id'] for r in rows]
+        session_counts = {}
+        if user_ids:
+            placeholders = ','.join(['?'] * len(user_ids))
+            sess_rows = db.execute(
+                f"SELECT user_id, COUNT(*) as cnt FROM user_sessions WHERE user_id IN ({placeholders}) GROUP BY user_id",
+                user_ids
+            ).fetchall()
+            session_counts = {r['user_id']: r['cnt'] for r in sess_rows}
+
+    users = []
+    for r in rows:
+        u = dict(r)
+        u['active_sessions'] = session_counts.get(r['id'], 0)
+        users.append(u)
+
+    return jsonify({
+        'users': users,
+        'total': count,
+        'page': page,
+        'per_page': per_page,
+        'pages': (count + per_page - 1) // per_page
+    })
+
+
+@admin_bp.route('/users/<int:user_id>', methods=['GET'])
+def get_user_detail(user_id):
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        row = db.execute(
+            "SELECT id, email, name, profile_data, created_at, updated_at FROM users WHERE id = ?",
+            (user_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'User not found'}), 404
+        user = dict(row)
+        try:
+            user['profile_data'] = json.loads(user['profile_data'] or '{}')
+        except (json.JSONDecodeError, TypeError):
+            user['profile_data'] = {}
+
+        sessions = db.execute(
+            "SELECT token, created_at FROM user_sessions WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,)
+        ).fetchall()
+        user['sessions'] = [{'token_preview': s['token'][:12] + '...', 'created_at': s['created_at']} for s in sessions]
+
+    return jsonify(user)
+
+
+@admin_bp.route('/users/<int:user_id>/sessions', methods=['DELETE'])
+def revoke_user_sessions(user_id):
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    with use_db() as db:
+        db.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
+        db.commit()
+    return jsonify({'message': 'All sessions revoked'})
+
+
+@admin_bp.route('/system', methods=['GET'])
+def system_info():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        # Database stats
+        recipe_count = db.execute("SELECT COUNT(*) FROM recipes WHERE status = 'active'").fetchone()[0]
+        archived_count = db.execute("SELECT COUNT(*) FROM recipes WHERE status != 'active'").fetchone()[0]
+        tag_count = db.execute("SELECT COUNT(*) FROM recipe_tags").fetchone()[0]
+        user_count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        user_session_count = db.execute("SELECT COUNT(*) FROM user_sessions").fetchone()[0]
+        admin_session_count = db.execute("SELECT COUNT(*) FROM admin_sessions").fetchone()[0]
+        api_key_count = db.execute("SELECT COUNT(*) FROM api_keys WHERE is_active = 1").fetchone()[0]
+        gen_job_count = db.execute("SELECT COUNT(*) FROM generation_jobs").fetchone()[0]
+        llm_log_count = db.execute("SELECT COUNT(*) FROM llm_cost_log").fetchone()[0]
+
+        # Recent activity
+        recent_recipes = db.execute(
+            "SELECT COUNT(*) FROM recipes WHERE created_at > datetime('now', '-7 days')"
+        ).fetchone()[0]
+        recent_users = db.execute(
+            "SELECT COUNT(*) FROM users WHERE created_at > datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        # DB file size
+        db_size = 0
+        try:
+            db_size = os.path.getsize(DB_PATH)
+        except OSError:
+            pass
+
+        # Table sizes
+        tables = ['recipes', 'recipe_tags', 'users', 'user_sessions', 'admin_sessions',
+                  'api_keys', 'generation_jobs', 'generation_queue', 'llm_cost_log']
+        table_stats = {}
+        for t in tables:
+            try:
+                cnt = db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                table_stats[t] = cnt
+            except Exception:
+                table_stats[t] = 0
+
+    return jsonify({
+        'database': {
+            'path': DB_PATH,
+            'size_bytes': db_size,
+            'size_mb': round(db_size / (1024 * 1024), 2) if db_size else 0,
+            'tables': table_stats,
+        },
+        'counts': {
+            'active_recipes': recipe_count,
+            'archived_recipes': archived_count,
+            'tags': tag_count,
+            'users': user_count,
+            'user_sessions': user_session_count,
+            'admin_sessions': admin_session_count,
+            'active_api_keys': api_key_count,
+            'generation_jobs': gen_job_count,
+            'llm_log_entries': llm_log_count,
+        },
+        'recent_7d': {
+            'new_recipes': recent_recipes,
+            'new_users': recent_users,
+        }
+    })
+
+
+@admin_bp.route('/analytics', methods=['GET'])
+def analytics():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        # Nutrition distribution (histogram buckets)
+        cal_dist = db.execute("""
+            SELECT
+                CASE
+                    WHEN calories < 200 THEN '0-199'
+                    WHEN calories < 400 THEN '200-399'
+                    WHEN calories < 600 THEN '400-599'
+                    WHEN calories < 800 THEN '600-799'
+                    ELSE '800+'
+                END as bucket,
+                COUNT(*) as cnt
+            FROM recipes WHERE status = 'active'
+            GROUP BY bucket ORDER BY bucket
+        """).fetchall()
+
+        prot_dist = db.execute("""
+            SELECT
+                CASE
+                    WHEN protein < 10 THEN '0-9g'
+                    WHEN protein < 20 THEN '10-19g'
+                    WHEN protein < 30 THEN '20-29g'
+                    WHEN protein < 40 THEN '30-39g'
+                    WHEN protein < 50 THEN '40-49g'
+                    ELSE '50g+'
+                END as bucket,
+                COUNT(*) as cnt
+            FROM recipes WHERE status = 'active'
+            GROUP BY bucket ORDER BY bucket
+        """).fetchall()
+
+        # Difficulty distribution
+        diff_dist = db.execute("""
+            SELECT difficulty, COUNT(*) as cnt
+            FROM recipes WHERE status = 'active'
+            GROUP BY difficulty ORDER BY cnt DESC
+        """).fetchall()
+
+        # Time distribution
+        time_dist = db.execute("""
+            SELECT
+                CASE
+                    WHEN total_time_min <= 15 THEN '0-15 min'
+                    WHEN total_time_min <= 30 THEN '16-30 min'
+                    WHEN total_time_min <= 60 THEN '31-60 min'
+                    WHEN total_time_min <= 120 THEN '61-120 min'
+                    ELSE '120+ min'
+                END as bucket,
+                COUNT(*) as cnt
+            FROM recipes WHERE status = 'active'
+            GROUP BY bucket ORDER BY bucket
+        """).fetchall()
+
+        # Top 10 cuisines
+        top_cuisines = db.execute("""
+            SELECT cuisine, COUNT(*) as cnt
+            FROM recipes WHERE status = 'active'
+            GROUP BY cuisine ORDER BY cnt DESC LIMIT 10
+        """).fetchall()
+
+        # Recipe creation over time (last 30 days)
+        daily_created = db.execute("""
+            SELECT DATE(created_at) as day, COUNT(*) as cnt
+            FROM recipes
+            WHERE created_at > datetime('now', '-30 days')
+            GROUP BY day ORDER BY day
+        """).fetchall()
+
+        # Source distribution
+        source_dist = db.execute("""
+            SELECT COALESCE(source, 'unknown') as source, COUNT(*) as cnt
+            FROM recipes WHERE status = 'active'
+            GROUP BY source ORDER BY cnt DESC
+        """).fetchall()
+
+        # Macro averages by meal type
+        macro_by_meal = db.execute("""
+            SELECT meal_type,
+                   COUNT(*) as cnt,
+                   ROUND(AVG(calories)) as avg_cal,
+                   ROUND(AVG(protein)) as avg_prot,
+                   ROUND(AVG(carbs)) as avg_carb,
+                   ROUND(AVG(fat)) as avg_fat
+            FROM recipes WHERE status = 'active'
+            GROUP BY meal_type ORDER BY cnt DESC
+        """).fetchall()
+
+        # User registrations over time (last 30 days)
+        user_signups = db.execute("""
+            SELECT DATE(created_at) as day, COUNT(*) as cnt
+            FROM users
+            WHERE created_at > datetime('now', '-30 days')
+            GROUP BY day ORDER BY day
+        """).fetchall()
+
+    return jsonify({
+        'calorie_distribution': [dict(r) for r in cal_dist],
+        'protein_distribution': [dict(r) for r in prot_dist],
+        'difficulty_distribution': [dict(r) for r in diff_dist],
+        'time_distribution': [dict(r) for r in time_dist],
+        'top_cuisines': [dict(r) for r in top_cuisines],
+        'daily_recipes_created': [dict(r) for r in daily_created],
+        'source_distribution': [dict(r) for r in source_dist],
+        'macro_by_meal_type': [dict(r) for r in macro_by_meal],
+        'user_signups': [dict(r) for r in user_signups],
+    })
+
+
+@admin_bp.route('/audit', methods=['GET'])
+def recipe_audit():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        # Missing descriptions
+        missing_desc = db.execute("""
+            SELECT id, name, cuisine, meal_type FROM recipes
+            WHERE status = 'active' AND (description IS NULL OR description = '')
+            LIMIT 50
+        """).fetchall()
+
+        # Missing ingredients or steps
+        missing_content = db.execute("""
+            SELECT id, name, cuisine, meal_type FROM recipes
+            WHERE status = 'active' AND (ingredients = '[]' OR steps = '[]' OR ingredients IS NULL OR steps IS NULL)
+            LIMIT 50
+        """).fetchall()
+
+        # Zero-calorie recipes (likely data errors)
+        zero_cal = db.execute("""
+            SELECT id, name, cuisine, meal_type, calories, protein FROM recipes
+            WHERE status = 'active' AND calories = 0
+            LIMIT 50
+        """).fetchall()
+
+        # Extremely high calorie (>1500 per serving)
+        high_cal = db.execute("""
+            SELECT id, name, cuisine, meal_type, calories, protein, carbs, fat FROM recipes
+            WHERE status = 'active' AND calories > 1500
+            ORDER BY calories DESC LIMIT 50
+        """).fetchall()
+
+        # Zero protein
+        zero_protein = db.execute("""
+            SELECT id, name, cuisine, meal_type, calories, protein FROM recipes
+            WHERE status = 'active' AND protein = 0 AND category NOT IN ('vegan', 'vegetarian')
+            LIMIT 50
+        """).fetchall()
+
+        # Macro imbalance: calories don't roughly match macros
+        macro_mismatch = db.execute("""
+            SELECT id, name, calories, protein, carbs, fat,
+                   (protein * 4 + carbs * 4 + fat * 9) as computed_cal
+            FROM recipes
+            WHERE status = 'active'
+              AND calories > 0
+              AND ABS(calories - (protein * 4 + carbs * 4 + fat * 9)) > calories * 0.3
+            ORDER BY ABS(calories - (protein * 4 + carbs * 4 + fat * 9)) DESC
+            LIMIT 50
+        """).fetchall()
+
+        # Recipes without tags
+        no_tags = db.execute("""
+            SELECT r.id, r.name, r.cuisine, r.meal_type FROM recipes r
+            LEFT JOIN recipe_tags rt ON rt.recipe_id = r.id
+            WHERE r.status = 'active' AND rt.id IS NULL
+            LIMIT 50
+        """).fetchall()
+
+        # Potential duplicates (same name)
+        dupes = db.execute("""
+            SELECT name, COUNT(*) as cnt, GROUP_CONCAT(id) as ids
+            FROM recipes WHERE status = 'active'
+            GROUP BY LOWER(name) HAVING cnt > 1
+            ORDER BY cnt DESC LIMIT 30
+        """).fetchall()
+
+    return jsonify({
+        'missing_description': [dict(r) for r in missing_desc],
+        'missing_content': [dict(r) for r in missing_content],
+        'zero_calories': [dict(r) for r in zero_cal],
+        'high_calories': [dict(r) for r in high_cal],
+        'zero_protein': [dict(r) for r in zero_protein],
+        'macro_mismatch': [dict(r) for r in macro_mismatch],
+        'no_tags': [dict(r) for r in no_tags],
+        'potential_duplicates': [dict(r) for r in dupes],
+        'summary': {
+            'missing_description': len(missing_desc),
+            'missing_content': len(missing_content),
+            'zero_calories': len(zero_cal),
+            'high_calories': len(high_cal),
+            'zero_protein': len(zero_protein),
+            'macro_mismatch': len(macro_mismatch),
+            'no_tags': len(no_tags),
+            'potential_duplicates': len(dupes),
+        }
+    })
+
+
+@admin_bp.route('/recipes/bulk', methods=['POST'])
+def bulk_recipe_action():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.get_json()
+    if not data or not data.get('ids') or not data.get('action'):
+        return jsonify({'error': 'ids and action required'}), 400
+
+    ids = data['ids']
+    action = data['action']
+
+    if not isinstance(ids, list) or len(ids) > 500:
+        return jsonify({'error': 'ids must be a list of up to 500'}), 400
+
+    allowed_actions = {'archive', 'activate', 'retag'}
+    if action not in allowed_actions:
+        return jsonify({'error': f'action must be one of: {", ".join(allowed_actions)}'}), 400
+
+    placeholders = ','.join(['?'] * len(ids))
+    affected = 0
+
+    with use_db() as db:
+        if action == 'archive':
+            cur = db.execute(f"UPDATE recipes SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders}) AND status = 'active'", ids)
+            affected = cur.rowcount
+        elif action == 'activate':
+            cur = db.execute(f"UPDATE recipes SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders}) AND status != 'active'", ids)
+            affected = cur.rowcount
+        elif action == 'retag':
+            for rid in ids:
+                recipe = get_recipe(rid)
+                if recipe:
+                    tags = compute_tags(recipe)
+                    db.execute("DELETE FROM recipe_tags WHERE recipe_id = ?", (rid,))
+                    _insert_tags_on_conn(db, rid, tags)
+                    affected += 1
+        db.commit()
+
+    return jsonify({'message': f'{action} applied to {affected} recipes', 'affected': affected})
+
+
+@admin_bp.route('/maintenance/cleanup', methods=['POST'])
+def run_cleanup():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    results = {}
+    with use_db() as db:
+        # Purge old sessions
+        cur = db.execute("DELETE FROM user_sessions WHERE created_at < datetime('now', '-30 days')")
+        results['expired_user_sessions'] = cur.rowcount
+        cur = db.execute("DELETE FROM admin_sessions WHERE created_at < datetime('now', '-7 days')")
+        results['expired_admin_sessions'] = cur.rowcount
+        # Purge completed generation jobs older than 30 days
+        cur = db.execute("DELETE FROM generation_queue WHERE batch_id IN (SELECT batch_id FROM generation_jobs WHERE status IN ('completed', 'completed_with_errors') AND created_at < datetime('now', '-30 days'))")
+        results['old_queue_items'] = cur.rowcount
+        cur = db.execute("DELETE FROM generation_jobs WHERE status IN ('completed', 'completed_with_errors') AND created_at < datetime('now', '-30 days')")
+        results['old_generation_jobs'] = cur.rowcount
+        db.commit()
+        # Optimize
+        db.execute("PRAGMA optimize")
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        results['optimized'] = True
+
+    return jsonify({'message': 'Cleanup completed', 'results': results})
+
+
+@admin_bp.route('/export/recipes', methods=['GET'])
+def export_recipes():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    limit = min(int(request.args.get('limit', 1000)), 5000)
+    with use_db() as db:
+        rows = db.execute(
+            "SELECT * FROM recipes WHERE status = 'active' ORDER BY id LIMIT ?",
+            (limit,)
+        ).fetchall()
+
+    from backend.models import recipe_to_dict
+    recipes = [recipe_to_dict(r) for r in rows]
+    return jsonify({'recipes': recipes, 'count': len(recipes)})
