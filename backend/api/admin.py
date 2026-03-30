@@ -49,6 +49,47 @@ def stats():
     return jsonify(get_overview_stats())
 
 
+@admin_bp.route('/llm-savings', methods=['GET'])
+def llm_savings():
+    """Show how many LLM calls were saved by the recipe cache."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    with use_db() as db:
+        rows = db.execute("""
+            SELECT endpoint, served_from,
+                   COUNT(*) as requests,
+                   SUM(recipe_count) as recipes
+            FROM llm_cost_log
+            GROUP BY endpoint, served_from
+            ORDER BY endpoint, served_from
+        """).fetchall()
+        totals = db.execute("""
+            SELECT served_from,
+                   COUNT(*) as requests,
+                   SUM(recipe_count) as recipes
+            FROM llm_cost_log
+            GROUP BY served_from
+        """).fetchall()
+        # Count cached recipes
+        cached_count = db.execute(
+            "SELECT COUNT(*) FROM recipes WHERE source = 'llm_cached' AND status = 'active'"
+        ).fetchone()[0]
+    breakdown = [dict(r) for r in rows]
+    summary = {r['served_from']: {'requests': r['requests'], 'recipes': r['recipes']} for r in totals}
+    db_saved = summary.get('db', {}).get('requests', 0) + summary.get('db_cache', {}).get('requests', 0)
+    llm_calls = summary.get('llm', {}).get('requests', 0)
+    total = db_saved + llm_calls
+    return jsonify({
+        'breakdown': breakdown,
+        'summary': summary,
+        'cached_recipes': cached_count,
+        'total_requests': total,
+        'db_served': db_saved,
+        'llm_calls': llm_calls,
+        'savings_pct': round(db_saved / total * 100, 1) if total > 0 else 0
+    })
+
+
 @admin_bp.route('/tags', methods=['GET'])
 def tag_stats():
     if not _check_admin(request):

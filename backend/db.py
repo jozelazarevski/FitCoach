@@ -123,6 +123,17 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(provider, key_name)
 );
+
+CREATE TABLE IF NOT EXISTS llm_cost_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint TEXT NOT NULL,
+    served_from TEXT NOT NULL,
+    recipe_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_cost_endpoint ON llm_cost_log(endpoint);
+CREATE INDEX IF NOT EXISTS idx_llm_cost_served ON llm_cost_log(served_from);
 """
 
 

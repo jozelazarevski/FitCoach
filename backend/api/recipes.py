@@ -1,13 +1,171 @@
 import json
 from flask import Blueprint, request, jsonify
-from backend.models import get_recipe, search_recipes, suggest_recipes, recipe_to_dict
+from backend.db import use_db
+from backend.models import get_recipe, search_recipes, suggest_recipes, recipe_to_dict, insert_recipe
+from backend.tag_engine import detect_cuisine, compute_tags, compute_deterministic_tags
 
 recipes_bp = Blueprint('recipes', __name__)
 
 
+# ---------------------------------------------------------------------------
+#  Cost-tracking helpers
+# ---------------------------------------------------------------------------
+
+def _log_cost(endpoint, served_from, recipe_count=0):
+    """Log whether a request was served from DB (free) or LLM (paid)."""
+    try:
+        with use_db() as db:
+            db.execute(
+                "INSERT INTO llm_cost_log (endpoint, served_from, recipe_count) VALUES (?, ?, ?)",
+                (endpoint, served_from, recipe_count)
+            )
+            db.commit()
+    except Exception:
+        pass  # non-critical
+
+
+def _save_suggestion_to_db(s):
+    """Persist an LLM-generated suggestion as a lightweight recipe in the DB.
+
+    This means the *next* time someone asks for a similar meal, the DB suggest
+    engine can return it without an LLM call.
+    """
+    try:
+        recipe_data = {
+            'name': s['name'],
+            'description': s.get('description', ''),
+            'category': s.get('category', 'general'),
+            'cuisine': s.get('cuisine', 'International'),
+            'meal_type': s.get('meal_type', 'any'),
+            'difficulty': s.get('difficulty', 'medium'),
+            'prep_time_min': int(s.get('prep_time_min', 0) or 0),
+            'cook_time_min': int(s.get('cook_time_min', 0) or 0),
+            'total_time_min': int(s.get('prep_time_min', 0) or 0) + int(s.get('cook_time_min', 0) or 0),
+            'servings': 1,
+            'calories': int(s.get('calories', 0)),
+            'protein': int(s.get('protein', 0)),
+            'carbs': int(s.get('carbs', 0)),
+            'fat': int(s.get('fat', 0)),
+            'fiber': int(s.get('fiber', 0) or 0),
+            'sugar': int(s.get('sugar', 0) or 0),
+            'ingredients': s.get('ingredients', []),
+            'steps': s.get('steps', []),
+            'tips': s.get('tips', ''),
+            'equipment': s.get('equipment', []),
+            'allergens': s.get('allergens', []),
+            'diet': s.get('diet', []),
+            'meal_prep_friendly': s.get('meal_prep_friendly', False),
+            'source': 'llm_cached',
+        }
+
+        # Skip if missing critical data
+        if not recipe_data['name'] or not recipe_data['calories']:
+            return None
+
+        # Skip if already in DB (by name)
+        with use_db() as db:
+            existing = db.execute(
+                "SELECT id FROM recipes WHERE name = ? AND status = 'active' LIMIT 1",
+                (recipe_data['name'],)
+            ).fetchone()
+            if existing:
+                return existing['id']
+
+        # Detect cuisine
+        cuisine_info = detect_cuisine(recipe_data)
+        recipe_data['cuisine'] = cuisine_info.get('cuisine', recipe_data['cuisine'])
+        recipe_data['country_of_origin'] = cuisine_info.get('country', 'International')
+        recipe_data['region'] = cuisine_info.get('region', 'International')
+
+        # Compute tags
+        tags = compute_tags(recipe_data)
+
+        recipe_id = insert_recipe(recipe_data, tags_dict=tags)
+        return recipe_id
+    except Exception:
+        return None
+
+
+def _save_full_recipe_to_db(result, cuisine='', category='', diet_filters=None):
+    """Persist a full LLM-generated recipe (with ingredients/steps) to the DB."""
+    try:
+        # Parse prep/cook time from strings like "15 min"
+        def _parse_min(val):
+            if isinstance(val, int):
+                return val
+            if isinstance(val, str):
+                import re
+                nums = re.findall(r'\d+', val)
+                return int(nums[0]) if nums else 0
+            return 0
+
+        # Normalize ingredients to structured format
+        ingredients = result.get('ingredients', [])
+        structured_ings = []
+        for ing in ingredients:
+            if isinstance(ing, dict):
+                structured_ings.append(ing)
+            else:
+                structured_ings.append({'item': str(ing), 'amount': '', 'grams': 0})
+
+        recipe_data = {
+            'name': result.get('name', 'Unnamed Recipe'),
+            'description': result.get('description', ''),
+            'category': category or result.get('category', 'general'),
+            'cuisine': cuisine or result.get('cuisine', 'International'),
+            'meal_type': result.get('meal_type', 'any'),
+            'difficulty': result.get('difficulty', 'medium'),
+            'prep_time_min': _parse_min(result.get('prep_time', result.get('prep_time_min', 0))),
+            'cook_time_min': _parse_min(result.get('cook_time', result.get('cook_time_min', 0))),
+            'servings': int(result.get('servings', 1) or 1),
+            'calories': int(result.get('calories', 0)),
+            'protein': int(result.get('protein', 0)),
+            'carbs': int(result.get('carbs', 0)),
+            'fat': int(result.get('fat', 0)),
+            'fiber': int(result.get('fiber', 0) or 0),
+            'sugar': int(result.get('sugar', 0) or 0),
+            'ingredients': structured_ings,
+            'steps': result.get('steps', []),
+            'tips': result.get('tips', ''),
+            'equipment': result.get('equipment', []),
+            'allergens': result.get('allergens', []),
+            'diet': diet_filters or result.get('diet', []),
+            'meal_prep_friendly': result.get('meal_prep_friendly', False),
+            'source': 'llm_cached',
+        }
+        recipe_data['total_time_min'] = recipe_data['prep_time_min'] + recipe_data['cook_time_min']
+
+        if not recipe_data['name'] or not recipe_data['calories']:
+            return None
+
+        # Skip duplicates
+        with use_db() as db:
+            existing = db.execute(
+                "SELECT id FROM recipes WHERE name = ? AND status = 'active' LIMIT 1",
+                (recipe_data['name'],)
+            ).fetchone()
+            if existing:
+                return existing['id']
+
+        cuisine_info = detect_cuisine(recipe_data)
+        recipe_data['cuisine'] = cuisine_info.get('cuisine', recipe_data['cuisine'])
+        recipe_data['country_of_origin'] = cuisine_info.get('country', 'International')
+        recipe_data['region'] = cuisine_info.get('region', 'International')
+
+        tags = compute_tags(recipe_data)
+        recipe_id = insert_recipe(recipe_data, tags_dict=tags)
+        return recipe_id
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+#  LLM-powered endpoints (with DB caching)
+# ---------------------------------------------------------------------------
+
 @recipes_bp.route('/suggest-llm', methods=['POST'])
 def suggest_llm():
-    """Generate recipe suggestions via LLM when DB is empty or insufficient."""
+    """Generate recipe suggestions via LLM, then cache them in the DB."""
     from backend.llm_client import call_llm_json
 
     data = request.get_json() or {}
@@ -69,9 +227,15 @@ Rules:
     try:
         result = call_llm_json(prompt, max_tokens=3000)
         if isinstance(result, dict) and 'suggestions' in result:
-            # Add source marker
+            saved_count = 0
             for s in result['suggestions']:
                 s['source'] = 'llm'
+                # Cache each suggestion to DB for future free retrieval
+                db_id = _save_suggestion_to_db(s)
+                if db_id:
+                    s['id'] = db_id
+                    saved_count += 1
+            _log_cost('suggest', 'llm', saved_count)
             return jsonify(result)
         return jsonify({'error': 'Invalid LLM response format'}), 500
     except RuntimeError as e:
@@ -82,7 +246,7 @@ Rules:
 
 @recipes_bp.route('/generate-llm', methods=['POST'])
 def generate_recipe_llm():
-    """Generate a full recipe via LLM for a given suggestion."""
+    """Generate a full recipe via LLM, then cache it in the DB."""
     from backend.llm_client import call_llm_json
 
     data = request.get_json() or {}
@@ -94,6 +258,36 @@ def generate_recipe_llm():
     cuisine = data.get('cuisine', '')
     category = data.get('category', '')
     diet_filters = data.get('diet_filters', [])
+
+    # Check DB first — maybe this exact recipe was already generated
+    with use_db() as db:
+        existing = db.execute(
+            "SELECT id FROM recipes WHERE name = ? AND status = 'active' LIMIT 1",
+            (name,)
+        ).fetchone()
+    if existing:
+        full = get_recipe(existing['id'])
+        if full and full.get('ingredients') and full.get('steps'):
+            # Serve from cache — free!
+            ings = full['ingredients']
+            _log_cost('generate', 'db_cache', 1)
+            return jsonify({
+                'name': full['name'],
+                'prep_time': f"{full.get('prep_time_min', 0)} min",
+                'cook_time': f"{full.get('cook_time_min', 0)} min",
+                'servings': str(full.get('servings', 1)),
+                'ingredients': [
+                    f"{i['amount']} {i['item']}" if isinstance(i, dict) else str(i)
+                    for i in (ings if isinstance(ings, list) else [])
+                ],
+                'steps': full.get('steps', []),
+                'tips': full.get('tips', ''),
+                'calories': full['calories'],
+                'protein': full['protein'],
+                'carbs': full['carbs'],
+                'fat': full['fat'],
+                'source': 'db_cache'
+            })
 
     diet_str = ', '.join(diet_filters) if diet_filters else 'no restrictions'
 
@@ -107,12 +301,18 @@ Diet restrictions: {diet_str}
 Return ONLY a valid JSON object:
 {{
   "name": "{name}",
+  "description": "One sentence describing the dish",
   "prep_time": "X min",
   "cook_time": "X min",
   "servings": "X",
-  "ingredients": ["200g chicken breast", "1 cup rice", ...],
+  "ingredients": [
+    {{"item": "ingredient name", "amount": "200g", "grams": 200}},
+    ...
+  ],
   "steps": ["Step 1...", "Step 2...", ...],
   "tips": "One fitness coaching tip about this meal",
+  "equipment": ["pan", "oven", ...],
+  "allergens": ["dairy", "gluten", ...],
   "calories": {calories},
   "protein": {protein},
   "carbs": {carbs},
@@ -120,7 +320,7 @@ Return ONLY a valid JSON object:
 }}
 
 Rules:
-- Include exact measurements for all ingredients
+- Include exact gram measurements for all ingredients
 - 6-12 ingredients, 4-8 clear steps
 - Make it practical, delicious, and achievable for a home cook
 - The tip should relate to fitness/nutrition timing/benefits
@@ -128,12 +328,20 @@ Rules:
 
     try:
         result = call_llm_json(prompt, max_tokens=3000)
-        if isinstance(result, dict) and 'ingredients' in result:
-            # Ensure ingredients are strings for frontend rendering
+        if isinstance(result, dict) and ('ingredients' in result or 'steps' in result):
+            # Save full recipe to DB — next time it's free
+            db_id = _save_full_recipe_to_db(result, cuisine, category, diet_filters)
+            if db_id:
+                result['id'] = db_id
+
+            # Normalize ingredients for frontend
             result['ingredients'] = [
-                f"{ing['amount']} {ing['item']}" if isinstance(ing, dict) else str(ing)
-                for ing in result['ingredients']
+                f"{ing.get('amount', '')} {ing.get('item', ing)}".strip()
+                if isinstance(ing, dict) else str(ing)
+                for ing in result.get('ingredients', [])
             ]
+            result['source'] = 'llm'
+            _log_cost('generate', 'llm', 1)
             return jsonify(result)
         return jsonify({'error': 'Invalid LLM response format'}), 500
     except RuntimeError as e:
@@ -208,6 +416,8 @@ def suggest():
     results = suggest_recipes(context, limit=5)
     if not results:
         return jsonify({'suggestions': [], 'top_pick_reason': 'No matching recipes found in database. Try generating recipes first.'})
+
+    _log_cost('suggest', 'db', len(results))
 
     top = results[0]
     remaining = context.get('remaining', {})
@@ -365,6 +575,16 @@ Rules:
     try:
         result = call_llm_json(prompt, max_tokens=6000)
         if isinstance(result, dict) and 'plan' in result:
+            # Cache every meal from the plan to DB
+            saved = 0
+            for day in result.get('plan', []):
+                for meal in day.get('meals', []):
+                    meal['meal_type'] = meal.get('type', 'any')
+                    db_id = _save_suggestion_to_db(meal)
+                    if db_id:
+                        meal['recipe_id'] = db_id
+                        saved += 1
+            _log_cost('meal_plan', 'llm', saved)
             result['source'] = 'llm'
             return jsonify(result)
         return jsonify({'error': 'Invalid meal plan format'}), 500

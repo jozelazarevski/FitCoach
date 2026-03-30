@@ -137,6 +137,7 @@
       <div class="nav-tab" data-tab="tags">Tags</div>
       <div class="nav-tab" data-tab="apikeys">API Keys</div>
       <div class="nav-tab" data-tab="generate">Generate</div>
+      <div class="nav-tab" data-tab="savings">LLM Savings</div>
     </div>
     <div class="content" id="tab-content"></div>
   </div>
@@ -304,6 +305,7 @@
           case 'tags': await renderTags(el); break;
           case 'apikeys': await renderApiKeys(el); break;
           case 'generate': await renderGenerate(el); break;
+          case 'savings': await renderSavings(el); break;
         }
       } catch (e) { el.innerHTML = `<p style="color:var(--red)">${e.message}</p>`; }
     }
@@ -818,6 +820,77 @@
           toast(result.message);
         } catch (e) { toast(e.message, true); }
       };
+    }
+
+    // LLM Savings
+    async function renderSavings(el) {
+      const data = await api('/llm-savings');
+      const pct = data.savings_pct || 0;
+      const barColor = pct > 70 ? 'var(--green)' : pct > 30 ? 'var(--yellow)' : 'var(--red)';
+
+      el.innerHTML = `
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">DB Cache Hit Rate</div>
+            <div class="stat-value" style="color:${barColor}">${pct}%</div>
+            <div class="progress-bar" style="margin-top:8px;height:8px;background:var(--surface2);border-radius:4px">
+              <div style="width:${pct}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.3s"></div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Served from DB (Free)</div>
+            <div class="stat-value green">${data.db_served || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">LLM API Calls (Paid)</div>
+            <div class="stat-value" style="color:var(--red)">${data.llm_calls || 0}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Auto-Cached Recipes</div>
+            <div class="stat-value blue">${data.cached_recipes || 0}</div>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:24px">
+          <div class="table-header">
+            <h2>Breakdown by Endpoint</h2>
+            <button class="btn btn-outline btn-sm" onclick="renderTab('savings')">Refresh</button>
+          </div>
+          <table>
+            <thead><tr><th>Endpoint</th><th>Source</th><th>Requests</th><th>Recipes</th></tr></thead>
+            <tbody>
+              ${(data.breakdown || []).map(r => `
+                <tr>
+                  <td><code>${r.endpoint}</code></td>
+                  <td><span class="badge ${r.served_from === 'llm' ? 'badge-red' : r.served_from === 'db_cache' ? 'badge-blue' : 'badge-green'}">${r.served_from}</span></td>
+                  <td>${r.requests}</td>
+                  <td>${r.recipes || 0}</td>
+                </tr>
+              `).join('')}
+              ${(data.breakdown || []).length === 0 ? '<tr><td colspan="4" style="text-align:center;color:var(--dim)">No requests logged yet</td></tr>' : ''}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="stat-card" style="margin-top:24px">
+          <div class="stat-label">How It Works</div>
+          <p style="font-size:13px;color:var(--dim);margin-top:8px;line-height:1.5">
+            Every LLM-generated recipe is automatically saved to the database. When a similar request comes in,
+            the system serves it from the DB cache instead of making a paid API call.
+            The more the app is used, the higher the cache hit rate becomes, reducing API costs over time.
+          </p>
+          <div style="margin-top:12px;display:flex;gap:12px">
+            <div style="flex:1;padding:8px 12px;border-radius:8px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2)">
+              <div style="font-size:11px;color:var(--green);font-weight:600">DB / DB CACHE</div>
+              <div style="font-size:12px;color:var(--dim);margin-top:2px">Free - served from local database</div>
+            </div>
+            <div style="flex:1;padding:8px 12px;border-radius:8px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2)">
+              <div style="font-size:11px;color:var(--red);font-weight:600">LLM</div>
+              <div style="font-size:12px;color:var(--dim);margin-top:2px">Paid API call - result cached for next time</div>
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     // Init
