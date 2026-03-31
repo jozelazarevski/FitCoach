@@ -57,7 +57,8 @@ const App = {
     const profile = Store.getProfile();
     const totals = Store.getTodayTotals();
     const meals = Store.getTodayMeals();
-    const targets = profile.macros;
+    const adaptiveResult = typeof Adaptive !== 'undefined' ? Adaptive.getAdaptiveTargets() : null;
+    const targets = adaptiveResult && adaptiveResult.adjustments.length > 0 ? adaptiveResult.adjusted : profile.macros;
 
     const screen = UI.$('#screen-dashboard');
 
@@ -131,6 +132,8 @@ const App = {
         </div>
       </div>
 
+
+      ${typeof Adaptive !== 'undefined' ? Adaptive.renderCard() : ''}
 
       ${this._renderMacroGapCard(totals, targets)}
 

@@ -7,17 +7,19 @@ Usage:
 """
 
 import logging
-import secrets
 import time
 import uuid
 from collections import defaultdict
-from flask import Flask, send_from_directory, jsonify, request, g
-from backend.db import init_db
-from backend.api.recipes import recipes_bp
+
+from flask import Flask, g, jsonify, request, send_from_directory
+
 from backend.api.admin import admin_bp
 from backend.api.auth import auth_bp
+from backend.api.coach import coach_bp
+from backend.api.recipes import recipes_bp
+from backend.db import init_db
 from backend.logging_config import setup_logging
-from config import SECRET_KEY, CORS_ORIGINS, ENVIRONMENT
+from config import CORS_ORIGINS, ENVIRONMENT, SECRET_KEY
 
 setup_logging(env=ENVIRONMENT)
 
@@ -33,6 +35,7 @@ app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max request size
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
 app.register_blueprint(recipes_bp, url_prefix='/api/recipes')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
+app.register_blueprint(coach_bp, url_prefix='/api/coach')
 
 logger = logging.getLogger(__name__)
 
