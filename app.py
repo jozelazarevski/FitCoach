@@ -243,7 +243,7 @@ def health():
     return jsonify({'status': overall, 'environment': ENVIRONMENT, 'checks': checks}), status_code
 
 
-# Error handlers
+# Error handlers with structured logging
 @app.errorhandler(404)
 def not_found(e):
     return jsonify({'error': 'Not found'}), 404
@@ -251,6 +251,34 @@ def not_found(e):
 
 @app.errorhandler(500)
 def server_error(e):
+    logger.error(
+        "Unhandled server error: %s",
+        str(e),
+        extra={
+            'request_id': getattr(g, 'request_id', ''),
+            'endpoint': request.path,
+            'method': request.method,
+            'client_ip': request.remote_addr,
+        },
+        exc_info=True,
+    )
+    return jsonify({'error': 'Internal server error'}), 500
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Catch-all error handler for unhandled exceptions."""
+    logger.error(
+        "Unhandled exception: %s: %s",
+        type(e).__name__, str(e),
+        extra={
+            'request_id': getattr(g, 'request_id', ''),
+            'endpoint': request.path,
+            'method': request.method,
+            'client_ip': request.remote_addr,
+        },
+        exc_info=True,
+    )
     return jsonify({'error': 'Internal server error'}), 500
 
 

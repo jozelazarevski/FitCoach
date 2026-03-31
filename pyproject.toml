@@ -2,3 +2,9 @@
 name = "fitcoach"
 version = "1.0.0"
 requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+addopts = "-v --tb=short"

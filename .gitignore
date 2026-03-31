@@ -10,4 +10,4 @@ venv/
 config.js
 data/recipes.db
 node_modules/
-.env
+.claude/settings.local.json

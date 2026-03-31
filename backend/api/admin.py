@@ -43,7 +43,38 @@ def login():
     with use_db() as db:
         db.execute("INSERT INTO admin_sessions (token) VALUES (?)", (token,))
         db.commit()
-    return jsonify({'token': token})
+
+    # Warn if using default password
+    requires_password_change = (ADMIN_PASSWORD == 'fitcoach-admin')
+    return jsonify({
+        'token': token,
+        'requires_password_change': requires_password_change,
+    })
+
+
+@admin_bp.route('/change-password', methods=['POST'])
+def change_admin_password():
+    """Allow admin to change the admin password (stored in DB for runtime override)."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.get_json() or {}
+    new_password = data.get('new_password', '')
+
+    if len(new_password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+    # Store hashed password override in api_keys table (provider='admin')
+    password_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    with use_db() as db:
+        db.execute("""
+            INSERT INTO api_keys (provider, key_name, api_key, is_active)
+            VALUES ('admin', 'password_override', ?, 1)
+            ON CONFLICT(provider, key_name) DO UPDATE SET api_key = ?
+        """, (password_hash, password_hash))
+        db.commit()
+
+    return jsonify({'message': 'Admin password changed successfully'})
 
 
 @admin_bp.route('/stats', methods=['GET'])
@@ -262,6 +293,9 @@ def add_api_key():
     if not data or not data.get('provider') or not data.get('api_key'):
         return jsonify({'error': 'Provider and api_key required'}), 400
 
+    from backend.encryption import encrypt_api_key
+    encrypted_key = encrypt_api_key(data['api_key'])
+
     with use_db() as db:
         try:
             db.execute("""
@@ -270,7 +304,7 @@ def add_api_key():
             """, (
                 data['provider'],
                 data.get('key_name', 'default'),
-                data['api_key'],
+                encrypted_key,
                 data.get('model', ''),
                 1 if data.get('is_active', True) else 0
             ))
@@ -295,7 +329,11 @@ def update_api_key(key_id):
         for field in ('api_key', 'model', 'key_name'):
             if field in data:
                 sets.append(f"{field} = ?")
-                params.append(data[field])
+                value = data[field]
+                if field == 'api_key':
+                    from backend.encryption import encrypt_api_key
+                    value = encrypt_api_key(value)
+                params.append(value)
         if 'is_active' in data:
             sets.append("is_active = ?")
             params.append(1 if data['is_active'] else 0)
@@ -324,7 +362,13 @@ def get_active_api_key(provider='anthropic'):
             "SELECT api_key, model FROM api_keys WHERE provider = ? AND is_active = 1 ORDER BY id LIMIT 1",
             (provider,)
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        # Decrypt API key if encrypted
+        from backend.encryption import decrypt_api_key
+        result['api_key'] = decrypt_api_key(result['api_key'])
+        return result
 
 
 def record_api_key_usage(provider='anthropic'):
@@ -338,6 +382,71 @@ def record_api_key_usage(provider='anthropic'):
             db.commit()
     except Exception:
         logging.debug("Failed to record API key usage", exc_info=True)
+
+
+@admin_bp.route('/cost-alerts', methods=['GET'])
+def cost_alerts():
+    """Check LLM usage against thresholds and return alerts."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    alerts = []
+    with use_db() as db:
+        # Calls in the last hour
+        hourly = db.execute("""
+            SELECT COUNT(*) FROM llm_cost_log
+            WHERE served_from = 'llm' AND created_at > datetime('now', '-1 hour')
+        """).fetchone()[0]
+
+        # Calls in the last 24 hours
+        daily = db.execute("""
+            SELECT COUNT(*) FROM llm_cost_log
+            WHERE served_from = 'llm' AND created_at > datetime('now', '-1 day')
+        """).fetchone()[0]
+
+        # Cache hit rate in the last 24 hours
+        total_24h = db.execute("""
+            SELECT COUNT(*) FROM llm_cost_log
+            WHERE created_at > datetime('now', '-1 day')
+        """).fetchone()[0]
+        cache_hits_24h = db.execute("""
+            SELECT COUNT(*) FROM llm_cost_log
+            WHERE served_from IN ('db', 'db_cache') AND created_at > datetime('now', '-1 day')
+        """).fetchone()[0]
+
+    # Configurable thresholds
+    HOURLY_THRESHOLD = 50
+    DAILY_THRESHOLD = 500
+    CACHE_HIT_MIN = 0.3  # Alert if cache hit rate drops below 30%
+
+    if hourly > HOURLY_THRESHOLD:
+        alerts.append({
+            'level': 'warning',
+            'message': f'High LLM usage: {hourly} calls in the last hour (threshold: {HOURLY_THRESHOLD})',
+        })
+    if daily > DAILY_THRESHOLD:
+        alerts.append({
+            'level': 'critical',
+            'message': f'Very high LLM usage: {daily} calls in the last 24h (threshold: {DAILY_THRESHOLD})',
+        })
+    if total_24h > 10:
+        cache_rate = cache_hits_24h / total_24h
+        if cache_rate < CACHE_HIT_MIN:
+            alerts.append({
+                'level': 'info',
+                'message': f'Low cache hit rate: {cache_rate:.0%} in the last 24h (target: >{CACHE_HIT_MIN:.0%})',
+            })
+
+    return jsonify({
+        'alerts': alerts,
+        'metrics': {
+            'hourly_llm_calls': hourly,
+            'daily_llm_calls': daily,
+            'daily_total_requests': total_24h,
+            'daily_cache_hits': cache_hits_24h,
+            'cache_hit_rate': round(cache_hits_24h / total_24h, 3) if total_24h > 0 else 0,
+        }
+    })
 
 
 @admin_bp.route('/generate/start', methods=['POST'])
