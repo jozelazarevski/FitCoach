@@ -1960,6 +1960,42 @@ html, body {
   text-decoration: line-through; opacity: 0.5;
 }
 
+/* Adaptive Macro Targets */
+.adaptive-card {
+  border-left: 3px solid var(--accent);
+}
+.adaptive-badge {
+  display: inline-block; font-size: 10px; padding: 1px 8px; margin-left: 8px;
+  border-radius: 10px; background: rgba(108,92,231,0.15); color: #a78bfa;
+  font-weight: 600; vertical-align: middle;
+}
+.adaptive-targets {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0;
+}
+.adaptive-target {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,0.03);
+}
+.adaptive-label { font-size: 13px; color: var(--text-dim); }
+.adaptive-value { font-size: 15px; font-weight: 700; }
+.adaptive-diff {
+  font-size: 11px; font-weight: 600; margin-left: 4px;
+}
+.adaptive-diff.up { color: #34d399; }
+.adaptive-diff.down { color: #f87171; }
+.adaptive-reasons { margin-top: 8px; }
+.adaptive-reason {
+  font-size: 12px; color: var(--text-dim); padding: 4px 0;
+  display: flex; align-items: flex-start; gap: 6px;
+}
+.adaptive-reason-icon { font-size: 14px; flex-shrink: 0; }
+.adaptive-weight-insight {
+  font-size: 12px; color: var(--text-dim); padding: 8px 10px; margin-top: 8px;
+  border-radius: 8px; background: rgba(245,158,11,0.08);
+  border: 1px solid rgba(245,158,11,0.15);
+  display: flex; align-items: flex-start; gap: 6px;
+}
+
 /* ============================================ */
 /* ENHANCED SUGGESTION CARDS                    */
 /* ============================================ */
