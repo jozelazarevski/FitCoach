@@ -31,24 +31,15 @@ const LLM = {
       };
       const prefs = Store.getPreferences();
 
-      // Gather recent meal history (last 3 days) — single pass for names, cuisines, proteins
-      const recentMealNames = [];
-      const recentCuisines = [];
-      const recentProteinSources = [];
+      // Gather recent meal history via MealHistory intelligence
+      const mealCtx = typeof MealHistory !== 'undefined'
+        ? MealHistory.getSuggestionContext(5)
+        : { recent_meal_names: [], recent_cuisines: [], recent_protein_sources: [] };
+      const recentMealNames = mealCtx.recent_meal_names;
+      const recentCuisines = mealCtx.recent_cuisines;
+      const recentProteinSources = mealCtx.recent_protein_sources;
       const data = Store.load();
       const todayKey = Store.getTodayKey();
-      for (let i = 0; i <= 3; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const key = d.toISOString().split('T')[0];
-        const dayMeals = data.logs[key]?.meals || [];
-        dayMeals.forEach(m => {
-          const name = m.description || m.items?.map(it => it.name).join(', ');
-          if (name) recentMealNames.push(name.toLowerCase());
-          if (m.cuisine) recentCuisines.push(m.cuisine.toLowerCase());
-          if (m.protein_source) recentProteinSources.push(m.protein_source.toLowerCase());
-        });
-      }
 
       // Count meals already eaten today to compute adaptive fraction
       const todayMeals = data.logs[todayKey]?.meals || [];
@@ -169,7 +160,13 @@ const LLM = {
           days_with_logs: daysWithLogs,
           minutes_since_last_meal: minutesSinceLastMeal,
           problematic_foods: problematicFoods,
-          beneficial_foods: beneficialFoods
+          beneficial_foods: beneficialFoods,
+          cuisine_frequency: mealCtx.cuisine_frequency || {},
+          protein_frequency: mealCtx.protein_frequency || {},
+          meal_patterns: mealCtx.patterns || {},
+          variety_score: mealCtx.variety_score || 0,
+          missing_proteins: mealCtx.missing_proteins || [],
+          top_foods: mealCtx.top_foods || [],
         })
       });
 
@@ -436,6 +433,9 @@ Rules:
         fat: Math.max(0, profile.macros.fat - todayTotals.fat)
       };
       const prefs = Store.getPreferences();
+      const mealCtx = typeof MealHistory !== 'undefined'
+        ? MealHistory.getSuggestionContext(5)
+        : {};
 
       const res = await fetch(`${this.backendUrl}/api/recipes/suggest-llm`, {
         method: 'POST',
@@ -448,7 +448,12 @@ Rules:
           remaining,
           liked: prefs.liked || [],
           disliked: prefs.disliked || [],
-          hour_of_day: new Date().getHours()
+          hour_of_day: new Date().getHours(),
+          recent_meal_names: mealCtx.recent_meal_names || [],
+          recent_cuisines: mealCtx.recent_cuisines || [],
+          recent_protein_sources: mealCtx.recent_protein_sources || [],
+          meal_patterns: mealCtx.patterns || {},
+          top_foods: mealCtx.top_foods || [],
         })
       });
 

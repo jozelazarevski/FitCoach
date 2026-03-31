@@ -137,6 +137,8 @@ const App = {
 
       ${typeof Adaptive !== 'undefined' ? Adaptive.renderCard() : ''}
 
+      ${typeof MealHistory !== 'undefined' ? MealHistory.renderInsightsCard() : ''}
+
       ${this._renderMacroGapCard(totals, targets)}
 
       <button class="btn btn-coach" id="btn-dashboard-coach">

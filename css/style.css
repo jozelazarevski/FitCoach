@@ -2306,3 +2306,126 @@ html, body {
   display: block;
   animation: fadeIn 0.2s ease;
 }
+
+/* Meal History Intelligence Card */
+.meal-history-card {
+  border-left: 3px solid var(--accent-purple, #a855f7);
+}
+
+.mh-variety-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.mh-variety-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 70px;
+}
+
+.mh-variety-ring {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: conic-gradient(
+    var(--accent-purple, #a855f7) calc(var(--variety-pct) * 1%),
+    rgba(255,255,255,0.08) 0
+  );
+  position: relative;
+}
+
+.mh-variety-ring::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--card-bg);
+}
+
+.mh-variety-ring span {
+  position: relative;
+  z-index: 1;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.mh-variety-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  text-align: center;
+}
+
+.mh-variety-breakdown {
+  flex: 1;
+  min-width: 0;
+}
+
+.mh-mini-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.mh-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mh-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: rgba(168, 85, 247, 0.12);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mh-tag small {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.mh-insights {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.mh-insight {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+}
+
+.mh-insight-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.mh-insight-low_protein { border-left: 2px solid var(--accent-orange, #f59e0b); }
+.mh-insight-high_calories { border-left: 2px solid var(--accent-red, #ef4444); }
+.mh-insight-repetition { border-left: 2px solid var(--accent-blue, #3b82f6); }
+.mh-insight-missing_meals { border-left: 2px solid var(--text-dim); }
