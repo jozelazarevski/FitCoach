@@ -208,27 +208,12 @@ const Profile = {
       </div>
 
       <div class="form-section">
-        <div class="form-section-title">AI Provider</div>
-        <div class="form-group">
-          <label class="form-label">Provider</label>
-          <select class="form-select" id="inp-provider">
-            <option value="openai" ${profile.apiProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
-            <option value="anthropic" ${profile.apiProvider === 'anthropic' ? 'selected' : ''}>Claude (Anthropic)</option>
-          </select>
-        </div>
-        <div class="form-group" id="claude-model-group" style="${profile.apiProvider === 'anthropic' ? '' : 'display:none'}">
-          <label class="form-label">Claude Model</label>
-          <select class="form-select" id="inp-claude-model">
-            <option value="claude-haiku-4-5-20251001" ${profile.claudeModel === 'claude-haiku-4-5-20251001' ? 'selected' : ''}>Claude Haiku 4.5 (fast, cheap)</option>
-            <option value="claude-sonnet-4-6" ${profile.claudeModel === 'claude-sonnet-4-6' ? 'selected' : ''}>Claude Sonnet 4.6 (balanced)</option>
-            <option value="claude-opus-4-6" ${profile.claudeModel === 'claude-opus-4-6' ? 'selected' : ''}>Claude Opus 4.6 (most capable)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">API Key</label>
-          <div class="api-key-wrap">
-            <input type="password" class="form-input" id="inp-apikey" value="${profile.apiKey || ''}" placeholder="Enter your API key">
-            <button class="api-key-toggle" id="toggle-key">&#128065;</button>
+        <div class="form-section-title">Appearance</div>
+        <div class="theme-toggle-row">
+          <span class="form-label">Theme</span>
+          <div class="theme-switcher" id="theme-switcher">
+            <button class="theme-opt ${document.documentElement.dataset.theme !== 'light' ? 'active' : ''}" data-theme="dark">Dark</button>
+            <button class="theme-opt ${document.documentElement.dataset.theme === 'light' ? 'active' : ''}" data-theme="light">Light</button>
           </div>
         </div>
       </div>
@@ -273,6 +258,17 @@ const Profile = {
     pills('#goal-pills', () => this._updateTDEE());
     pills('#activity-pills', () => this._updateTDEE());
 
+    // Theme switcher
+    UI.$('#theme-switcher')?.addEventListener('click', e => {
+      const opt = e.target.closest('.theme-opt');
+      if (!opt) return;
+      const theme = opt.dataset.theme;
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem('fitcoach-theme', theme);
+      UI.$$('#theme-switcher .theme-opt').forEach(o => o.classList.remove('active'));
+      opt.classList.add('active');
+    });
+
     // Health conditions: multi-select toggle
     UI.$('#health-pills')?.addEventListener('click', e => {
       // Handle remove button on custom pills
@@ -303,16 +299,6 @@ const Profile = {
       const hLabel = unit === 'metric' ? 'cm' : 'in';
       UI.$('#inp-weight').previousElementSibling.textContent = `Weight (${wLabel})`;
       UI.$('#inp-height').previousElementSibling.textContent = `Height (${hLabel})`;
-    });
-
-    UI.$('#inp-provider')?.addEventListener('change', e => {
-      const group = UI.$('#claude-model-group');
-      if (group) group.style.display = e.target.value === 'anthropic' ? '' : 'none';
-    });
-
-    UI.$('#toggle-key')?.addEventListener('click', () => {
-      const inp = UI.$('#inp-apikey');
-      inp.type = inp.type === 'password' ? 'text' : 'password';
     });
 
     UI.$('#btn-save-profile')?.addEventListener('click', () => {
@@ -365,9 +351,7 @@ const Profile = {
       activityLevel: UI.$('#activity-pills .goal-pill.active')?.dataset.val || 'moderate',
       goal: UI.$('#goal-pills .goal-pill.active')?.dataset.val || 'fat_loss',
       healthConditions: Array.from(UI.$$('#health-pills .health-pill.active')).map(p => p.dataset.val),
-      apiProvider: UI.$('#inp-provider')?.value || 'openai',
-      apiKey: UI.$('#inp-apikey')?.value || '',
-      claudeModel: UI.$('#inp-claude-model')?.value || 'claude-haiku-4-5-20251001'
+      apiProvider: 'anthropic'
     };
   },
 

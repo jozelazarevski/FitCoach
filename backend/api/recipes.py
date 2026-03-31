@@ -908,3 +908,170 @@ def grocery_list():
         'pantry_items': sum(1 for i in items if i['in_pantry']),
         'to_buy': sum(1 for i in items if not i['in_pantry']),
     })
+
+
+# ---------------------------------------------------------------------------
+#  Food Parsing (text + image) — uses server-side LLM key
+# ---------------------------------------------------------------------------
+
+_FOOD_PARSE_PROMPT = """You are a nutrition expert. Parse the user's food description into individual items with estimated macros.
+Reply with ONLY valid JSON in this exact format, no other text:
+{
+  "items": [
+    {"name": "food name", "calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar_natural": 0, "sugar_processed": 0, "fiber": 0}
+  ],
+  "total": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar_natural": 0, "sugar_processed": 0, "fiber": 0}
+}
+Rules:
+- Estimate portions if not specified (use typical serving sizes)
+- Be accurate with calorie and macro estimates based on standard nutritional data
+- Round all numbers to integers
+- Include ALL items mentioned
+- If a quantity is mentioned, calculate for that quantity
+- sugar_natural = sugars from fruit, dairy, honey, whole foods
+- sugar_processed = sugars from added/refined sources (white sugar, HFCS, syrups, candy, soda, packaged foods)
+- If unsure, classify as processed"""
+
+_FOOD_IMAGE_SYSTEM = """You are a nutrition expert. Analyze the food in this image and estimate macros for each item you can see.
+Reply with ONLY valid JSON in this exact format, no other text:
+{
+  "items": [
+    {"name": "food name", "calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar_natural": 0, "sugar_processed": 0, "fiber": 0}
+  ],
+  "total": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar_natural": 0, "sugar_processed": 0, "fiber": 0}
+}
+Rules:
+- Identify ALL food items visible in the image
+- Estimate portion sizes visually
+- Be accurate with calorie and macro estimates
+- Round all numbers to integers
+- If you can't identify something, make your best estimate and note it in the name
+- sugar_natural = sugars from fruit, dairy, honey, whole foods
+- sugar_processed = sugars from added/refined sources (white sugar, HFCS, syrups, candy, soda, packaged foods)
+- If unsure, classify as processed"""
+
+
+def _recalculate_total(parsed):
+    """Recalculate total from items to ensure consistency."""
+    fields = ('calories', 'protein', 'carbs', 'fat', 'sugar_natural', 'sugar_processed', 'fiber')
+    parsed['total'] = {f: sum(item.get(f, 0) for item in parsed.get('items', [])) for f in fields}
+    return parsed
+
+
+@recipes_bp.route('/parse-food', methods=['POST'])
+def parse_food():
+    """Parse a text food description into items with macros using server-side LLM."""
+    data = request.get_json() or {}
+    description = (data.get('description') or '').strip()
+    if not description:
+        return jsonify({'error': 'No food description provided'}), 400
+
+    try:
+        from backend.llm_client import call_llm_json
+        prompt = f"{_FOOD_PARSE_PROMPT}\n\nFood description: {description}"
+        result = call_llm_json(prompt, max_tokens=1500)
+        # Handle LLM returning a plain list instead of {items: [...]}
+        if isinstance(result, list):
+            result = {'items': result}
+        if not isinstance(result, dict) or 'items' not in result:
+            logging.warning("Food parse unexpected result: %s", str(result)[:300])
+            return jsonify({'error': 'Failed to parse food data'}), 500
+        result = _recalculate_total(result)
+        _log_cost('parse_food', 'llm')
+        return jsonify(result)
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        logging.warning("Food parse failed: %s", e, exc_info=True)
+        return jsonify({'error': f'Food parse error: {e}'}), 500
+
+
+@recipes_bp.route('/parse-food-image', methods=['POST'])
+def parse_food_image():
+    """Parse a food image into items with macros using server-side LLM vision."""
+    data = request.get_json() or {}
+    image = (data.get('image') or '').strip()
+    if not image:
+        return jsonify({'error': 'No image data provided'}), 400
+
+    try:
+        from backend.llm_client import call_llm_vision
+        result = call_llm_vision(
+            _FOOD_IMAGE_SYSTEM,
+            image,
+            'Analyze this food image and estimate the macros for everything you see.',
+            max_tokens=1500,
+        )
+        if not isinstance(result, dict) or 'items' not in result:
+            return jsonify({'error': 'Failed to analyze food image'}), 500
+        result = _recalculate_total(result)
+        _log_cost('parse_food_image', 'llm')
+        return jsonify(result)
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        logging.warning("Food image parse failed: %s", e, exc_info=True)
+        return jsonify({'error': 'Failed to analyze food image. Please try again.'}), 500
+
+
+@recipes_bp.route('/gap-advice', methods=['POST'])
+def gap_advice():
+    """Get advice on how to fill remaining macro gaps using server-side LLM."""
+    from backend.llm_client import call_llm_json
+
+    data = request.get_json() or {}
+    remaining = data.get('remaining', {})
+    totals = data.get('totals', {})
+    profile_info = data.get('profile', {})
+    meals_log = data.get('meals_log', '')
+    hour = data.get('hour', 12)
+    health_conditions = data.get('health_conditions', [])
+
+    health_note = ''
+    if health_conditions:
+        health_note = f"\nHealth conditions: {', '.join(health_conditions)}. All suggestions must be safe for these."
+
+    prompt = f"""You are an elite sports nutritionist. The client has macro gaps to fill before the day ends. Suggest a mix of whole food quick options AND supplement options (protein shakes, bars, etc.) to close the gap efficiently.
+Reply with ONLY valid JSON, no other text:
+{{
+  "assessment": "1-2 sentence personalized assessment of their current gap situation and urgency",
+  "options": [
+    {{
+      "type": "supplement",
+      "name": "Option name",
+      "description": "Specific product/food with exact portions",
+      "calories": 0, "protein": 0, "carbs": 0, "fat": 0,
+      "tip": "Optional pro tip"
+    }}
+  ]
+}}
+The "type" field MUST be exactly "supplement" or "food" (no other values).
+Rules:
+- Provide exactly 5 options, mix of supplements (shakes, bars, powders, BCAAs) and whole foods (quick options like Greek yogurt, eggs, cottage cheese, jerky, etc.)
+- Order from most practical/efficient to least
+- Be specific: "1 scoop whey isolate (30g) in 250ml water" not just "protein shake"
+- For supplements: mention common types (whey, casein, plant-based, collagen) and when each is best
+- Consider time of day: late evening = casein, post-workout = whey, etc.
+- If client is vegan/dairy-free, suggest plant-based alternatives
+- Factor in remaining calorie budget - don't suggest options that blow the calorie target
+- If protein gap is small (<15g), suggest food over supplements{health_note}
+
+Client: {profile_info.get('gender', 'unknown')}, {profile_info.get('age', '?')}yo, {profile_info.get('weight', '?')}{profile_info.get('unit', 'kg')}, Goal: {profile_info.get('goal', 'maintenance')}
+Daily targets: {profile_info.get('calories', '?')}cal / {profile_info.get('protein', '?')}g P / {profile_info.get('carbs', '?')}g C / {profile_info.get('fat', '?')}g F
+Eaten so far: {totals.get('calories', 0)}cal / {totals.get('protein', 0)}g P / {totals.get('carbs', 0)}g C / {totals.get('fat', 0)}g F
+Remaining: {remaining.get('calories', 0)}cal / {remaining.get('protein', 0)}g P / {remaining.get('carbs', 0)}g C / {remaining.get('fat', 0)}g F
+Meals today: {meals_log or 'Nothing yet'}
+Time now: {hour}:00
+
+How should they fill the remaining macro gaps most efficiently?"""
+
+    try:
+        result = call_llm_json(prompt, max_tokens=2000)
+        if isinstance(result, dict) and 'options' in result:
+            return jsonify(result)
+        return jsonify({'error': 'Invalid response format'}), 500
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        logging.warning("Gap advice failed: %s", e, exc_info=True)
+        return jsonify({'error': f'Gap advice failed: {e}'}), 500

@@ -23,25 +23,25 @@ from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, OLLAMA_BASE_URL, OLLAMA_M
 def _get_provider_config():
     """Get the best available LLM provider config from DB or env.
 
-    Priority: Anthropic DB key > Anthropic env key > Ollama (if configured).
+    Priority: Anthropic env key > Anthropic DB key > Ollama (if configured).
     """
     from backend.api.admin import get_active_api_key
 
-    # Try Anthropic from DB first (primary for web deployment)
+    # Try Anthropic from env first (simplest, most reliable)
+    if ANTHROPIC_API_KEY and anthropic:
+        return {
+            'provider': 'anthropic',
+            'api_key': ANTHROPIC_API_KEY,
+            'model': ANTHROPIC_MODEL
+        }
+
+    # Try Anthropic from DB (admin panel)
     anthropic_data = get_active_api_key('anthropic')
     if anthropic_data and anthropic:
         return {
             'provider': 'anthropic',
             'api_key': anthropic_data['api_key'],
             'model': anthropic_data.get('model', '') or ANTHROPIC_MODEL
-        }
-
-    # Try Anthropic from env
-    if ANTHROPIC_API_KEY and anthropic:
-        return {
-            'provider': 'anthropic',
-            'api_key': ANTHROPIC_API_KEY,
-            'model': ANTHROPIC_MODEL
         }
 
     # Fallback: Ollama (local dev only)
@@ -114,12 +114,66 @@ def _call_ollama(base_url, model, prompt, max_tokens):
 def _call_anthropic(api_key, model, prompt, max_tokens):
     """Call Anthropic Claude API."""
     client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}]
+        )
+    except anthropic.AuthenticationError:
+        raise RuntimeError("Invalid API key. Please update your Anthropic API key in the admin panel.")
     return response.content[0].text
+
+
+def call_llm_vision(system_prompt, base64_image, user_text, max_tokens=1500):
+    """Call LLM with an image (vision) and return parsed JSON.
+
+    Only Anthropic Claude supports vision. Raises RuntimeError if unavailable.
+    """
+    config = _get_provider_config()
+    if not config:
+        raise RuntimeError("No LLM provider configured. Add your Anthropic API key via admin panel.")
+    if config['provider'] != 'anthropic':
+        raise RuntimeError("Image analysis requires Anthropic Claude. Configure it via admin panel.")
+
+    from backend.api.admin import record_api_key_usage
+
+    media_type = 'image/jpeg' if base64_image.startswith('/9j/') else 'image/png'
+    client = anthropic.Anthropic(api_key=config['api_key'])
+    try:
+        response = client.messages.create(
+            model=config['model'],
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{
+                'role': 'user',
+                'content': [
+                    {'type': 'image', 'source': {'type': 'base64', 'media_type': media_type, 'data': base64_image}},
+                    {'type': 'text', 'text': user_text},
+                ],
+            }],
+        )
+    except anthropic.AuthenticationError:
+        raise RuntimeError("Invalid API key. Please update your Anthropic API key in the admin panel.")
+    record_api_key_usage(config['provider'])
+    text = response.content[0].text
+
+    # Parse JSON from response
+    text = text.strip()
+    if text.startswith('```'):
+        text = text.split('\n', 1)[1] if '\n' in text else text[3:]
+        text = text.rsplit('```', 1)[0]
+    text = text.strip()
+    for start_char, end_char in [('{', '}'), ('[', ']')]:
+        if start_char in text:
+            start = text.find(start_char)
+            end = text.rfind(end_char)
+            if start != -1 and end != -1 and end > start:
+                try:
+                    return json.loads(text[start:end + 1])
+                except json.JSONDecodeError:
+                    continue
+    return json.loads(text)
 
 
 def call_llm_json(prompt, max_tokens=4000):
@@ -129,6 +183,7 @@ def call_llm_json(prompt, max_tokens=4000):
     Raises ValueError if JSON cannot be parsed.
     """
     text = call_llm(prompt, max_tokens)
+    logging.debug("LLM raw response: %s", text[:500])
     # Clean markdown fences
     text = text.strip()
     if text.startswith("```"):

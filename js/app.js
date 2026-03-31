@@ -3,6 +3,10 @@ const App = {
   historyMonth: new Date(),
 
   init() {
+    // Apply saved theme
+    const savedTheme = localStorage.getItem('fitcoach-theme');
+    if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+
     // Auth gate: require login before anything
     if (!Auth.isLoggedIn()) {
       Auth.renderAuthScreen();
@@ -203,13 +207,6 @@ const App = {
   },
 
   async getGapAdvice() {
-    const profile = Store.getProfile();
-    if (!profile.apiKey) {
-      UI.toast('Set your API key in Profile first', 'error');
-      App.navigate('profile');
-      return;
-    }
-
     const btn = UI.$('#btn-gap-advisor');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Thinking...';

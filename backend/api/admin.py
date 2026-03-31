@@ -355,6 +355,48 @@ def delete_api_key(key_id):
     return jsonify({'message': 'API key deleted'})
 
 
+@admin_bp.route('/api-keys/<int:key_id>/validate', methods=['POST'])
+def validate_api_key(key_id):
+    """Test whether an API key is valid by making a minimal API call."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        row = db.execute(
+            "SELECT provider, api_key FROM api_keys WHERE id = ?", (key_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'Key not found'}), 404
+
+        provider = row['provider']
+        from backend.encryption import decrypt_api_key
+        api_key = decrypt_api_key(row['api_key'])
+
+    if provider == 'anthropic':
+        try:
+            import anthropic as _anthropic
+            client = _anthropic.Anthropic(api_key=api_key)
+            client.messages.create(
+                model='claude-haiku-4-5-20251001',
+                max_tokens=10,
+                messages=[{'role': 'user', 'content': 'Hi'}],
+            )
+            return jsonify({'valid': True, 'message': 'API key is valid'})
+        except Exception as e:
+            return jsonify({'valid': False, 'message': str(e)})
+    elif provider == 'ollama':
+        try:
+            import requests as _req
+            r = _req.get(f"{api_key}/api/tags", timeout=5)
+            if r.ok:
+                return jsonify({'valid': True, 'message': 'Ollama is reachable'})
+            return jsonify({'valid': False, 'message': f'Ollama returned status {r.status_code}'})
+        except Exception as e:
+            return jsonify({'valid': False, 'message': str(e)})
+
+    return jsonify({'valid': False, 'message': f'Unknown provider: {provider}'})
+
+
 def get_active_api_key(provider='anthropic'):
     """Get the active API key for a provider from the database."""
     with use_db() as db:

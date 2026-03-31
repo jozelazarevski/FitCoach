@@ -20,6 +20,25 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+[data-theme="light"] {
+  --bg: #f5f5f8;
+  --bg-card: #ffffff;
+  --bg-input: #eeeef3;
+  --border: #d8d8e0;
+  --text: #1a1a2e;
+  --text-dim: #6b6b80;
+  --primary: #5b4cdb;
+  --primary-glow: rgba(91, 76, 219, 0.15);
+  --accent-green: #00b862;
+  --accent-red: #e53935;
+  --accent-orange: #f59e0b;
+  --accent-blue: #2196f3;
+  --cal-color: #e53935;
+  --protein-color: #2196f3;
+  --carb-color: #f59e0b;
+  --fat-color: #e91e8a;
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
@@ -1054,6 +1073,35 @@ html, body {
 }
 
 .data-actions .btn { flex: 1; font-size: 13px; padding: 10px; }
+
+/* Theme switcher */
+.theme-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+.theme-switcher {
+  display: flex;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.theme-opt {
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.theme-opt.active {
+  background: var(--primary);
+  color: #fff;
+}
 
 /* API key input */
 .api-key-wrap {
@@ -2517,3 +2565,63 @@ html, body {
 .mh-insight-high_calories { border-left: 2px solid var(--accent-red, #ef4444); }
 .mh-insight-repetition { border-left: 2px solid var(--accent-blue, #3b82f6); }
 .mh-insight-missing_meals { border-left: 2px solid var(--text-dim); }
+
+/* ============================================ */
+/* LIGHT THEME OVERRIDES                        */
+/* ============================================ */
+[data-theme="light"] .loading-overlay {
+  background: rgba(245,245,248,0.85);
+}
+[data-theme="light"] .modal-overlay {
+  background: rgba(0,0,0,0.35);
+}
+[data-theme="light"] .card,
+[data-theme="light"] .nav,
+[data-theme="light"] .screen-header {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+/* Replace rgba(255,255,255,x) subtle backgrounds with dark equivalents */
+[data-theme="light"] .sug-tag,
+[data-theme="light"] .streak-badge {
+  background: rgba(0,0,0,0.04);
+}
+[data-theme="light"] .mh-insight {
+  background: rgba(0,0,0,0.03);
+}
+[data-theme="light"] .mh-insights {
+  border-top-color: rgba(0,0,0,0.08);
+}
+[data-theme="light"] .insights-food-bar-wrap {
+  background: rgba(0,0,0,0.06);
+}
+[data-theme="light"] .insights-stat {
+  border-bottom-color: rgba(0,0,0,0.06);
+}
+[data-theme="light"] .mh-variety-ring {
+  background: conic-gradient(
+    var(--accent-purple, #a855f7) calc(var(--variety-pct) * 1%),
+    rgba(0,0,0,0.08) 0
+  );
+}
+[data-theme="light"] .spinner {
+  border-color: rgba(0,0,0,0.15);
+  border-top-color: var(--primary);
+}
+[data-theme="light"] .btn-outline {
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .btn-outline:hover {
+  background: rgba(0,0,0,0.04);
+}
+[data-theme="light"] .goal-pill {
+  background: var(--bg-input);
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .nav-btn {
+  color: var(--text-dim);
+}
+[data-theme="light"] .nav-btn.active {
+  color: var(--primary);
+}

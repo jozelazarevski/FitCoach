@@ -81,13 +81,6 @@ const Tracker = {
     const text = input.value.trim();
     if (!text) return;
 
-    const profile = Store.getProfile();
-    if (!profile.apiKey) {
-      UI.toast('Set your API key in Profile first', 'error');
-      App.navigate('profile');
-      return;
-    }
-
     UI.showLoading('Analyzing your meal...');
 
     try {
@@ -134,13 +127,6 @@ const Tracker = {
     const file = e.target.files[0];
     if (!file) return;
     e.target.value = '';
-
-    const profile = Store.getProfile();
-    if (!profile.apiKey) {
-      UI.toast('Set your API key in Profile first', 'error');
-      App.navigate('profile');
-      return;
-    }
 
     // Show image preview
     const preview = UI.$('#camera-preview');

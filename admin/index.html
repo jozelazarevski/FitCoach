@@ -602,6 +602,7 @@
                   <td>${k.usage_count}</td>
                   <td style="font-size:12px">${k.last_used_at || 'Never'}</td>
                   <td>
+                    <button class="btn btn-outline btn-sm btn-validate-key" data-id="${k.id}">Validate</button>
                     <button class="btn btn-outline btn-sm btn-toggle-key" data-id="${k.id}" data-active="${k.is_active ? '1' : '0'}">${k.is_active ? 'Disable' : 'Enable'}</button>
                     <button class="btn btn-danger btn-sm btn-del-key" data-id="${k.id}">Delete</button>
                   </td>
@@ -653,6 +654,29 @@
           renderApiKeys(el);
         } catch (e) { toast(e.message, true); }
       };
+
+      el.querySelectorAll('.btn-validate-key').forEach(btn => {
+        btn.onclick = async () => {
+          btn.disabled = true;
+          btn.textContent = 'Testing...';
+          try {
+            const result = await api(`/api-keys/${btn.dataset.id}/validate`, { method: 'POST' });
+            if (result.valid) {
+              btn.textContent = 'Valid';
+              btn.style.color = 'var(--green, #4caf50)';
+              toast('API key is valid');
+            } else {
+              btn.textContent = 'Invalid';
+              btn.style.color = 'var(--red, #f44336)';
+              toast(result.message || 'Key is invalid', true);
+            }
+          } catch (e) {
+            btn.textContent = 'Error';
+            toast(e.message, true);
+          }
+          setTimeout(() => { btn.textContent = 'Validate'; btn.style.color = ''; btn.disabled = false; }, 3000);
+        };
+      });
 
       el.querySelectorAll('.btn-toggle-key').forEach(btn => {
         btn.onclick = async () => {

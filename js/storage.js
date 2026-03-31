@@ -16,9 +16,7 @@ const Store = {
         tdee: 0,
         macros: { calories: 0, protein: 0, carbs: 0, fat: 0 },
         customMacros: false,
-        apiProvider: 'openai',
-        apiKey: '',
-        claudeModel: 'claude-haiku-4-5-20251001',
+        apiProvider: 'anthropic',
         unit: 'metric',
         healthConditions: [],
         dietaryPreferences: {
@@ -82,14 +80,7 @@ const Store = {
   },
 
   getProfile() {
-    const profile = this.load().profile;
-    // Apply config.js defaults if API key not set in profile
-    if (typeof CONFIG !== 'undefined') {
-      if (!profile.apiKey && CONFIG.apiKey) profile.apiKey = CONFIG.apiKey;
-      if (CONFIG.apiProvider && !profile.apiKey) profile.apiProvider = CONFIG.apiProvider;
-      if (CONFIG.claudeModel && !profile.claudeModel) profile.claudeModel = CONFIG.claudeModel;
-    }
-    return profile;
+    return this.load().profile;
   },
 
   saveProfile(profile) {

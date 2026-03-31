@@ -1,9 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+    (function(){var t=localStorage.getItem('fitcoach-theme');if(t)document.documentElement.dataset.theme=t;})();
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
-  <meta name="theme-color" content="#0a0a0f">
+  <meta name="theme-color" content="#0a0a0f" id="meta-theme-color">
+  <script>if(localStorage.getItem('fitcoach-theme')==='light')document.getElementById('meta-theme-color').content='#f5f5f8';</script>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="manifest" href="manifest.json">

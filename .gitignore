@@ -11,3 +11,4 @@ config.js
 data/recipes.db
 node_modules/
 .claude/settings.local.json
+.secret_key
