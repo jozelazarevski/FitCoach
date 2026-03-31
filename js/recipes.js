@@ -2,6 +2,8 @@ const Recipes = {
   page: 1,
   filters: {},
   cache: {},
+  _currentRecipe: null,
+  _currentServings: null,
 
   async renderScreen() {
     const screen = UI.$('#screen-recipes');
@@ -194,7 +196,11 @@ const Recipes = {
           <div class="rd-meta-row">
             ${recipe.total_time_min ? `<span class="rd-meta-item">&#9201; ${recipe.total_time_min} min</span>` : ''}
             ${recipe.difficulty ? `<span class="rd-meta-item">${recipe.difficulty}</span>` : ''}
-            ${recipe.servings ? `<span class="rd-meta-item">Serves ${recipe.servings}</span>` : ''}
+            ${recipe.servings ? `<span class="rd-meta-item rd-servings-wrap">
+              <button class="rd-serving-btn" id="rd-serving-minus">&#8722;</button>
+              <span id="rd-serving-count">Serves ${recipe.servings}</span>
+              <button class="rd-serving-btn" id="rd-serving-plus">&#43;</button>
+            </span>` : ''}
           </div>
         </div>
 
@@ -243,6 +249,22 @@ const Recipes = {
 
       UI.$('#rd-close')?.addEventListener('click', () => this.closeDetail());
 
+      // Servings adjuster
+      this._currentRecipe = recipe;
+      this._currentServings = recipe.servings || 1;
+      UI.$('#rd-serving-minus')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (this._currentServings > 1) {
+          this._currentServings--;
+          this._scaleRecipe();
+        }
+      });
+      UI.$('#rd-serving-plus')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._currentServings++;
+        this._scaleRecipe();
+      });
+
       content.querySelector('.rd-btn-log')?.addEventListener('click', () => {
         Store.addMeal({
           time: new Date().toISOString(),
@@ -266,7 +288,61 @@ const Recipes = {
     }
   },
 
+  async _scaleRecipe() {
+    const recipe = this._currentRecipe;
+    if (!recipe || !recipe.id) return;
+
+    try {
+      const res = await fetch(`/api/recipes/${recipe.id}/scale?servings=${this._currentServings}`);
+      if (!res.ok) return;
+      const scaled = await res.json();
+
+      // Update serving count display
+      const countEl = UI.$('#rd-serving-count');
+      if (countEl) countEl.textContent = `Serves ${this._currentServings}`;
+
+      // Update macros display
+      const macroContainer = document.querySelector('.rd-macros');
+      if (macroContainer) {
+        macroContainer.innerHTML = `
+          <div class="rd-macro"><div class="rd-macro-val" style="color:var(--cal-color)">${scaled.calories}</div><div class="rd-macro-label">cal</div></div>
+          <div class="rd-macro"><div class="rd-macro-val" style="color:var(--protein-color)">${scaled.protein}g</div><div class="rd-macro-label">protein</div></div>
+          <div class="rd-macro"><div class="rd-macro-val" style="color:var(--carb-color)">${scaled.carbs}g</div><div class="rd-macro-label">carbs</div></div>
+          <div class="rd-macro"><div class="rd-macro-val" style="color:var(--fat-color)">${scaled.fat}g</div><div class="rd-macro-label">fat</div></div>
+          ${scaled.fiber ? `<div class="rd-macro"><div class="rd-macro-val" style="color:#56ab2f">${scaled.fiber}g</div><div class="rd-macro-label">fiber</div></div>` : ''}
+        `;
+      }
+
+      // Update ingredients
+      const ingList = document.querySelector('.rd-list');
+      if (ingList && scaled.ingredients) {
+        ingList.innerHTML = scaled.ingredients.map(i =>
+          `<li>${typeof i === 'string' ? i : `${i.amount || ''} ${i.item || ''}`}</li>`
+        ).join('');
+      }
+
+      // Show scale factor badge
+      if (scaled.scale_factor && scaled.scale_factor !== 1) {
+        const badge = document.querySelector('.rd-scale-badge');
+        if (badge) {
+          badge.textContent = `${scaled.scale_factor}x`;
+        } else {
+          const countEl2 = UI.$('#rd-serving-count');
+          if (countEl2) {
+            countEl2.insertAdjacentHTML('afterend', `<span class="rd-scale-badge">${scaled.scale_factor}x</span>`);
+          }
+        }
+      } else {
+        document.querySelector('.rd-scale-badge')?.remove();
+      }
+    } catch (err) {
+      console.error('Scale failed:', err);
+    }
+  },
+
   closeDetail() {
     UI.$('#recipe-detail-modal')?.classList.remove('show');
+    this._currentRecipe = null;
+    this._currentServings = null;
   }
 };

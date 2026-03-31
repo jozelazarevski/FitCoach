@@ -1,10 +1,12 @@
 import json
 import logging
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
+
 from backend.db import use_db
-from backend.models import get_recipe, search_recipes, suggest_recipes, recipe_to_dict, insert_recipe
-from backend.tag_engine import detect_cuisine, compute_tags, compute_deterministic_tags
-from backend.validation import validate_suggestion_response, validate_generated_recipe, validate_meal_plan
+from backend.models import get_recipe, insert_recipe, search_recipes, suggest_recipes
+from backend.tag_engine import compute_tags, detect_cuisine
+from backend.validation import validate_generated_recipe, validate_meal_plan, validate_suggestion_response
 
 recipes_bp = Blueprint('recipes', __name__)
 
@@ -630,3 +632,245 @@ def similar_recipes(recipe_id):
     # Exclude the original recipe
     result['recipes'] = [r for r in result['recipes'] if r['id'] != recipe_id][:5]
     return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+#  Recipe Scaling
+# ---------------------------------------------------------------------------
+
+@recipes_bp.route('/<int:recipe_id>/scale', methods=['GET'])
+def scale_recipe(recipe_id):
+    """Return a recipe with ingredients and macros scaled to requested servings."""
+    recipe = get_recipe(recipe_id)
+    if not recipe:
+        return jsonify({'error': 'Recipe not found'}), 404
+
+    try:
+        target_servings = float(request.args.get('servings', recipe.get('servings', 1)))
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid servings value'}), 400
+
+    original_servings = max(recipe.get('servings', 1), 1)
+    scale_factor = target_servings / original_servings
+
+    # Scale macros
+    for field in ('calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar'):
+        if recipe.get(field) is not None:
+            recipe[field] = round(recipe[field] * scale_factor)
+
+    # Scale ingredients
+    scaled_ingredients = []
+    for ing in recipe.get('ingredients', []):
+        if isinstance(ing, dict):
+            scaled = dict(ing)
+            if scaled.get('grams'):
+                scaled['grams'] = round(scaled['grams'] * scale_factor)
+            if scaled.get('amount'):
+                scaled['amount'] = _scale_amount_str(scaled['amount'], scale_factor)
+            scaled_ingredients.append(scaled)
+        elif isinstance(ing, str):
+            scaled_ingredients.append(_scale_ingredient_string(ing, scale_factor))
+        else:
+            scaled_ingredients.append(ing)
+
+    recipe['ingredients'] = scaled_ingredients
+    recipe['servings'] = round(target_servings) if target_servings == int(target_servings) else target_servings
+    recipe['scale_factor'] = round(scale_factor, 2)
+
+    return jsonify(recipe)
+
+
+def _scale_amount_str(amount_str, factor):
+    """Scale a quantity string like '200g' or '1/2 cup'."""
+    import re
+    # Match leading number (int, float, or fraction)
+    match = re.match(r'^(\d+(?:\.\d+)?(?:/\d+)?)\s*(.*)', str(amount_str))
+    if not match:
+        return amount_str
+    num_str, unit = match.groups()
+    try:
+        if '/' in num_str:
+            parts = num_str.split('/')
+            num = float(parts[0]) / float(parts[1])
+        else:
+            num = float(num_str)
+        scaled = num * factor
+        # Format nicely
+        if scaled == int(scaled):
+            return f"{int(scaled)} {unit}".strip()
+        return f"{scaled:.1f} {unit}".strip()
+    except (ValueError, ZeroDivisionError):
+        return amount_str
+
+
+def _scale_ingredient_string(ing_str, factor):
+    """Scale a plain text ingredient like '200g chicken breast'."""
+    import re
+    match = re.match(r'^(\d+(?:\.\d+)?)\s*(g|ml|oz|lb|kg|cup|cups|tbsp|tsp|tablespoon|teaspoon)?\s*(.*)', ing_str, re.IGNORECASE)
+    if not match:
+        return ing_str
+    num_str, unit, rest = match.groups()
+    try:
+        scaled = float(num_str) * factor
+        unit = unit or ''
+        if scaled == int(scaled):
+            return f"{int(scaled)}{unit} {rest}".strip()
+        return f"{scaled:.1f}{unit} {rest}".strip()
+    except ValueError:
+        return ing_str
+
+
+# ---------------------------------------------------------------------------
+#  Smart Grocery List
+# ---------------------------------------------------------------------------
+
+# Category mapping for common ingredients
+_GROCERY_CATEGORIES = {
+    'produce': {'onion', 'garlic', 'tomato', 'lettuce', 'spinach', 'kale', 'broccoli',
+                'pepper', 'cucumber', 'carrot', 'celery', 'avocado', 'lemon', 'lime',
+                'ginger', 'cilantro', 'parsley', 'basil', 'mint', 'mushroom', 'zucchini',
+                'potato', 'sweet potato', 'corn', 'peas', 'green beans', 'cabbage',
+                'cauliflower', 'asparagus', 'bell pepper', 'jalapeño', 'scallion',
+                'arugula', 'banana', 'apple', 'berries', 'blueberries', 'strawberries'},
+    'protein': {'chicken', 'beef', 'pork', 'turkey', 'salmon', 'tuna', 'shrimp', 'cod',
+                'tofu', 'tempeh', 'egg', 'eggs', 'lamb', 'duck', 'tilapia', 'sausage',
+                'bacon', 'steak', 'ground beef', 'ground turkey', 'chicken breast',
+                'chicken thigh', 'fish', 'seafood', 'scallops', 'mussels'},
+    'dairy': {'milk', 'cheese', 'yogurt', 'butter', 'cream', 'sour cream', 'cream cheese',
+              'mozzarella', 'parmesan', 'cheddar', 'feta', 'ricotta', 'cottage cheese',
+              'greek yogurt', 'heavy cream', 'whipping cream'},
+    'grains': {'rice', 'pasta', 'bread', 'oats', 'quinoa', 'flour', 'tortilla', 'noodles',
+               'couscous', 'barley', 'bulgur', 'pita', 'wrap', 'bagel', 'cereal',
+               'brown rice', 'white rice', 'whole wheat', 'panko', 'breadcrumbs'},
+    'pantry': {'olive oil', 'vegetable oil', 'coconut oil', 'soy sauce', 'vinegar',
+               'honey', 'maple syrup', 'sugar', 'salt', 'pepper', 'cumin', 'paprika',
+               'oregano', 'thyme', 'cinnamon', 'nutmeg', 'chili powder', 'turmeric',
+               'cayenne', 'garlic powder', 'onion powder', 'mustard', 'ketchup',
+               'hot sauce', 'sriracha', 'fish sauce', 'sesame oil', 'tahini',
+               'peanut butter', 'almond butter', 'coconut milk', 'stock', 'broth',
+               'tomato paste', 'tomato sauce', 'canned tomatoes', 'beans', 'lentils',
+               'chickpeas', 'nuts', 'almonds', 'walnuts', 'cashews', 'seeds',
+               'chia seeds', 'flax seeds', 'protein powder', 'cornstarch'},
+}
+
+
+def _categorize_ingredient(name):
+    """Assign a grocery category to an ingredient name."""
+    name_lower = name.lower()
+    for category, keywords in _GROCERY_CATEGORIES.items():
+        for kw in keywords:
+            if kw in name_lower:
+                return category
+    return 'other'
+
+
+def _normalize_ingredient_name(name):
+    """Normalize an ingredient name for deduplication."""
+    import re
+    name = name.lower().strip()
+    # Remove common descriptors
+    for word in ('fresh', 'dried', 'chopped', 'diced', 'minced', 'sliced', 'ground',
+                 'large', 'small', 'medium', 'organic', 'frozen', 'canned', 'raw',
+                 'cooked', 'boneless', 'skinless', 'extra-virgin', 'low-fat', 'whole'):
+        name = re.sub(rf'\b{word}\b', '', name)
+    return re.sub(r'\s+', ' ', name).strip()
+
+
+@recipes_bp.route('/grocery-list', methods=['POST'])
+def grocery_list():
+    """Generate a consolidated grocery list from recipe IDs or a meal plan."""
+    data = request.get_json() or {}
+    recipe_ids = data.get('recipe_ids', [])
+    plan = data.get('plan', [])  # Accept a meal plan structure directly
+    pantry = set(item.lower() for item in data.get('pantry', []))
+
+    # Collect recipe IDs from plan if provided
+    if plan and not recipe_ids:
+        for day in plan:
+            for meal in day.get('meals', []):
+                rid = meal.get('recipe_id')
+                if rid:
+                    recipe_ids.append(rid)
+
+    if not recipe_ids:
+        return jsonify({'error': 'No recipe IDs provided'}), 400
+
+    # Fetch all recipes
+    aggregated = {}  # normalized_name -> {name, grams, amount, category, recipe_names}
+
+    for rid in recipe_ids:
+        recipe = get_recipe(rid)
+        if not recipe:
+            continue
+
+        for ing in recipe.get('ingredients', []):
+            if isinstance(ing, dict):
+                item_name = ing.get('item', '')
+                grams = ing.get('grams', 0) or 0
+                amount = ing.get('amount', '')
+            elif isinstance(ing, str):
+                item_name = ing
+                grams = 0
+                amount = ''
+            else:
+                continue
+
+            if not item_name:
+                continue
+
+            norm = _normalize_ingredient_name(item_name)
+            if not norm:
+                continue
+
+            if norm not in aggregated:
+                aggregated[norm] = {
+                    'name': item_name.strip(),
+                    'total_grams': 0,
+                    'amounts': [],
+                    'category': _categorize_ingredient(item_name),
+                    'recipes': [],
+                    'in_pantry': any(p in norm for p in pantry) if pantry else False,
+                }
+
+            aggregated[norm]['total_grams'] += grams
+            if amount:
+                aggregated[norm]['amounts'].append(amount)
+            aggregated[norm]['recipes'].append(recipe.get('name', f'Recipe #{rid}'))
+
+    # Build final list grouped by category
+    items = []
+    for _norm, data in aggregated.items():
+        # Combine amounts
+        combined_amount = ''
+        if data['total_grams'] > 0:
+            combined_amount = f"{data['total_grams']}g"
+        elif data['amounts']:
+            combined_amount = ' + '.join(data['amounts'])
+
+        items.append({
+            'name': data['name'],
+            'amount': combined_amount,
+            'category': data['category'],
+            'recipe_count': len(data['recipes']),
+            'recipes': list(set(data['recipes'])),
+            'in_pantry': data['in_pantry'],
+        })
+
+    # Sort: by category, then alphabetically
+    items.sort(key=lambda x: (x['category'], x['name'].lower()))
+
+    # Group by category
+    grouped = {}
+    for item in items:
+        cat = item['category']
+        if cat not in grouped:
+            grouped[cat] = []
+        grouped[cat].append(item)
+
+    return jsonify({
+        'items': items,
+        'grouped': grouped,
+        'total_items': len(items),
+        'pantry_items': sum(1 for i in items if i['in_pantry']),
+        'to_buy': sum(1 for i in items if not i['in_pantry']),
+    })
