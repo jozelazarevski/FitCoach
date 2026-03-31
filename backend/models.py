@@ -1,7 +1,8 @@
 import json
 import random
 from datetime import date
-from backend.db import get_db, use_db
+
+from backend.db import use_db
 
 
 def recipe_to_dict(row):
@@ -300,15 +301,20 @@ def suggest_recipes(context, limit=5):
     is_weekend = day_of_week in (0, 6) if day_of_week is not None else False
     is_meal_prep_day = day_of_week == 0 if day_of_week is not None else False  # Sunday
 
-    # Cuisine frequency for diversity
-    cuisine_counts = {}
-    for c in recent_cuisines:
-        cuisine_counts[c] = cuisine_counts.get(c, 0) + 1
+    # Cuisine frequency for diversity — prefer pre-computed from MealHistory if available
+    cuisine_counts = context.get('cuisine_frequency', {})
+    if not cuisine_counts:
+        for c in recent_cuisines:
+            cuisine_counts[c] = cuisine_counts.get(c, 0) + 1
 
-    # Protein source frequency for rotation
-    protein_counts = {}
-    for p in recent_protein_sources:
-        protein_counts[p] = protein_counts.get(p, 0) + 1
+    # Protein source frequency for rotation — prefer pre-computed from MealHistory
+    protein_counts = context.get('protein_frequency', {})
+    if not protein_counts:
+        for p in recent_protein_sources:
+            protein_counts[p] = protein_counts.get(p, 0) + 1
+
+    # Boost for missing protein sources (encourage variety)
+    missing_proteins = context.get('missing_proteins', [])
 
     # Pre-compute health boost/penalty tag sets
     health_boost_tags = {}
@@ -566,13 +572,19 @@ def suggest_recipes(context, limit=5):
             freq = cuisine_counts[recipe_cuisine]
             score -= min(freq * 5, 15)
 
-        # ── 12. Protein source rotation (-12) ──
+        # ── 12. Protein source rotation (-12 / +10) ──
         recipe_psources = rtags.get('protein_source', [])
         if recipe_psources and protein_counts:
             for ps in recipe_psources:
                 ps_lower = ps.lower()
                 if ps_lower in protein_counts:
                     score -= min(protein_counts[ps_lower] * 4, 12)
+                    break
+        # Boost recipes with protein sources the user hasn't eaten recently
+        if recipe_psources and missing_proteins:
+            for ps in recipe_psources:
+                if ps.lower() in missing_proteins:
+                    score += 10
                     break
 
         # ── 13. Recent meal penalty (-30) ──
@@ -611,7 +623,6 @@ def suggest_recipes(context, limit=5):
         for prob_food in problematic_foods:
             if prob_food in name_lower or prob_food in ing_text:
                 score -= 30
-                why_parts.append(f'contains {prob_food} (causes discomfort)')
                 break
         for ben_food in beneficial_foods:
             if ben_food in name_lower or ben_food in ing_text:

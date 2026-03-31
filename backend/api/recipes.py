@@ -183,9 +183,25 @@ def suggest_llm():
     disliked = data.get('disliked', [])
     hour = data.get('hour_of_day', 12)
 
+    recent_meals = data.get('recent_meal_names', [])
+    recent_cuisines = data.get('recent_cuisines', [])
+    recent_proteins = data.get('recent_protein_sources', [])
+    meal_patterns = data.get('meal_patterns', {})
+    top_foods = data.get('top_foods', [])
+
     diet_str = ', '.join(diet_filters) if diet_filters else 'no restrictions'
     liked_str = ', '.join(liked[:5]) if liked else 'none'
     disliked_str = ', '.join(disliked[:5]) if disliked else 'none'
+    recent_str = ', '.join(recent_meals[:8]) if recent_meals else 'none logged'
+    cuisine_str = ', '.join(set(recent_cuisines[:6])) if recent_cuisines else 'unknown'
+    protein_str = ', '.join(set(recent_proteins[:6])) if recent_proteins else 'unknown'
+    top_foods_str = ', '.join(f.get('name', '') for f in top_foods[:5]) if top_foods else 'none'
+
+    # Build pattern insights for the prompt
+    pattern_hints = []
+    for insight in (meal_patterns.get('insights') or []):
+        pattern_hints.append(f"- {insight.get('message', '')}")
+    pattern_str = '\n'.join(pattern_hints[:3]) if pattern_hints else 'No patterns detected yet'
 
     prompt = f"""You are an elite fitness nutrition coach. Suggest exactly 5 meal recipes for a client.
 
@@ -197,6 +213,14 @@ Context:
 - Foods they like: {liked_str}
 - Foods they dislike: {disliked_str}
 - Current hour: {hour}:00
+
+Meal history (avoid repetition, increase variety):
+- Recent meals: {recent_str}
+- Recent cuisines: {cuisine_str}
+- Recent protein sources: {protein_str}
+- Most eaten foods: {top_foods_str}
+- Patterns:
+{pattern_str}
 
 Return ONLY a valid JSON object with this exact structure:
 {{
@@ -228,6 +252,9 @@ Rules:
 - Each suggestion should fit within the remaining macro budget
 - Respect diet restrictions strictly
 - Avoid disliked foods, prefer liked foods
+- AVOID suggesting meals the client already ate recently (see meal history above)
+- Use DIFFERENT cuisines and protein sources than recent meals to increase variety
+- Address any nutritional pattern issues noted above (e.g. low protein at breakfast)
 - For {goal}: {"high protein, low cal" if goal in ("fat_loss", "cutting") else "high protein, high carbs" if goal in ("bulking", "muscle_building") else "balanced macros"}"""
 
     try:
