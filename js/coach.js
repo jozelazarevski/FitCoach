@@ -824,6 +824,20 @@ const Coach = {
       `).join('')}
     `;
 
+    // Add grocery list button
+    const recipeIds = [];
+    result.plan.forEach(day => {
+      (day.meals || []).forEach(m => { if (m.recipe_id) recipeIds.push(m.recipe_id); });
+    });
+    if (recipeIds.length > 0) {
+      container.insertAdjacentHTML('beforeend', `
+        <div class="card" style="text-align:center;margin-top:8px">
+          <button class="btn btn-full" id="btn-grocery-list">&#128722; Generate Grocery List</button>
+        </div>
+      `);
+      UI.$('#btn-grocery-list')?.addEventListener('click', () => this._showGroceryList(recipeIds));
+    }
+
     // Click on meal plan items to view recipe detail
     container.querySelectorAll('.meal-plan-item[data-recipe-id]').forEach(item => {
       item.addEventListener('click', () => {
@@ -833,6 +847,95 @@ const Coach = {
         }
       });
     });
+  },
+
+  async _showGroceryList(recipeIds) {
+    const btn = UI.$('#btn-grocery-list');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Loading...';
+    }
+
+    try {
+      const pantry = Store.getPantry?.() || [];
+      const res = await fetch('/api/recipes/grocery-list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipe_ids: recipeIds, pantry })
+      });
+      if (!res.ok) throw new Error('Failed to generate grocery list');
+      const data = await res.json();
+
+      // Build modal
+      const grouped = data.grouped || {};
+      const categoryIcons = { produce: '&#129382;', protein: '&#129385;', dairy: '&#129472;', grains: '&#127838;', pantry: '&#129474;', other: '&#127860;' };
+
+      let html = `
+        <div class="modal-overlay show" id="grocery-modal">
+          <div class="recipe-detail-sheet" style="max-height:85vh;overflow-y:auto">
+            <div class="rd-header">
+              <button class="rd-close" id="grocery-close">&times;</button>
+              <div class="rd-name">Grocery List</div>
+              <div class="rd-desc">${data.total_items} items total &middot; ${data.to_buy} to buy${data.pantry_items ? ` &middot; ${data.pantry_items} in pantry` : ''}</div>
+            </div>
+            <div class="grocery-categories">
+      `;
+
+      for (const [cat, items] of Object.entries(grouped)) {
+        const icon = categoryIcons[cat] || '&#127860;';
+        html += `
+          <div class="grocery-category">
+            <div class="grocery-cat-title">${icon} ${cat.charAt(0).toUpperCase() + cat.slice(1)}</div>
+            <ul class="grocery-items">
+              ${items.map(item => `
+                <li class="grocery-item ${item.in_pantry ? 'in-pantry' : ''}">
+                  <label>
+                    <input type="checkbox" ${item.in_pantry ? 'checked' : ''}>
+                    <span class="grocery-item-name">${item.name}</span>
+                    <span class="grocery-item-amount">${item.amount}</span>
+                    ${item.recipe_count > 1 ? `<span class="grocery-item-recipes">${item.recipe_count} recipes</span>` : ''}
+                  </label>
+                </li>
+              `).join('')}
+            </ul>
+          </div>
+        `;
+      }
+
+      html += `
+            </div>
+            <div class="rd-actions" style="margin-top:16px">
+              <button class="btn btn-full" id="grocery-copy">&#128203; Copy to Clipboard</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.insertAdjacentHTML('beforeend', html);
+
+      UI.$('#grocery-close')?.addEventListener('click', () => {
+        UI.$('#grocery-modal')?.remove();
+      });
+      UI.$('#grocery-modal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'grocery-modal') UI.$('#grocery-modal')?.remove();
+      });
+      UI.$('#grocery-copy')?.addEventListener('click', () => {
+        const lines = data.items
+          .filter(i => !i.in_pantry)
+          .map(i => `${i.name} - ${i.amount}`);
+        navigator.clipboard?.writeText(lines.join('\n'))
+          .then(() => UI.toast('Grocery list copied!', 'success'))
+          .catch(() => UI.toast('Could not copy', 'error'));
+      });
+
+    } catch (err) {
+      UI.toast(err.message, 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '&#128722; Generate Grocery List';
+      }
+    }
   },
 
   _bindLogSuggestions() {
