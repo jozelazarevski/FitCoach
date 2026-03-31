@@ -110,6 +110,15 @@ const LLM = {
       const allDays = Store.getAllDays();
       const daysWithLogs = allDays.length;
 
+      // Feeling insights — foods that agree/disagree with user
+      const feelingInsights = Store.getFeelingInsights();
+      let problematicFoods = [];
+      let beneficialFoods = [];
+      if (feelingInsights) {
+        problematicFoods = feelingInsights.problematic.map(p => p.food);
+        beneficialFoods = feelingInsights.beneficial.map(p => p.food);
+      }
+
       // Fiber and sugar tracking
       const remainingFull = {
         ...remaining,
@@ -133,6 +142,7 @@ const LLM = {
         body: JSON.stringify({
           meal_types: Array.isArray(mealTypes) ? mealTypes : [mealTypes],
           diet_filters: dietFilters || [],
+          dietary_preferences: profile.dietaryPreferences?.dietaryStyle || [],
           goal: profile.goal || '',
           remaining: remainingFull,
           liked: prefs.liked || [],
@@ -157,7 +167,9 @@ const LLM = {
           water_ml: todayWater,
           water_target_ml: waterTarget,
           days_with_logs: daysWithLogs,
-          minutes_since_last_meal: minutesSinceLastMeal
+          minutes_since_last_meal: minutesSinceLastMeal,
+          problematic_foods: problematicFoods,
+          beneficial_foods: beneficialFoods
         })
       });
 
@@ -431,6 +443,7 @@ Rules:
         body: JSON.stringify({
           meal_types: Array.isArray(mealTypes) ? mealTypes : [mealTypes],
           diet_filters: dietFilters || [],
+          dietary_preferences: profile.dietaryPreferences?.dietaryStyle || [],
           goal: profile.goal || '',
           remaining,
           liked: prefs.liked || [],

@@ -291,6 +291,8 @@ def suggest_recipes(context, limit=5):
     water_target = context.get('water_target_ml', 2300)
     days_with_logs = context.get('days_with_logs', 0)
     mins_since_meal = context.get('minutes_since_last_meal')
+    problematic_foods = [f.lower().strip() for f in context.get('problematic_foods', [])]
+    beneficial_foods = [f.lower().strip() for f in context.get('beneficial_foods', [])]
 
     meal_fraction = _adaptive_meal_fraction(meals_eaten_today)
     time_meals = _time_appropriate_meals(hour_of_day)
@@ -603,6 +605,17 @@ def suggest_recipes(context, limit=5):
             disliked_words = disliked_food.split()
             if any(w in name_words for w in disliked_words) or disliked_food in ing_text:
                 score -= 100
+                break
+
+        # ── 14b. Feeling-based food scoring (+10 / -30) ──
+        for prob_food in problematic_foods:
+            if prob_food in name_lower or prob_food in ing_text:
+                score -= 30
+                why_parts.append(f'contains {prob_food} (causes discomfort)')
+                break
+        for ben_food in beneficial_foods:
+            if ben_food in name_lower or ben_food in ing_text:
+                score += 10
                 break
 
         # ── 15. Pantry match with coverage ratio (+15) ──
