@@ -24,6 +24,10 @@ const Tracker = {
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
           <span>Voice</span>
         </button>` : ''}
+        <button class="input-action-btn" id="btn-restaurant" title="Eating out">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 002-2V2"/><path d="M7 2v20"/><path d="M21 15V2v0a5 5 0 00-5 5v6c0 1.1.9 2 2 2h3zm0 0v7"/></svg>
+          <span>Eating Out</span>
+        </button>
       </div>
       <input type="file" id="camera-input" accept="image/*" capture="environment" style="display:none">
       <input type="file" id="gallery-input" accept="image/*" style="display:none">
@@ -41,6 +45,7 @@ const Tracker = {
     UI.$('#btn-camera')?.addEventListener('click', () => this.showCameraOptions());
     UI.$('#btn-barcode')?.addEventListener('click', () => this.startBarcodeScanner());
     UI.$('#btn-voice')?.addEventListener('click', () => this.toggleVoice());
+    UI.$('#btn-restaurant')?.addEventListener('click', () => this.showRestaurantMode());
 
     UI.$('#camera-input')?.addEventListener('change', e => this.handleImageCapture(e));
     UI.$('#gallery-input')?.addEventListener('change', e => this.handleImageCapture(e));
@@ -517,5 +522,145 @@ const Tracker = {
         App.refreshDashboard();
       });
     });
-  }
+  },
+
+  // === RESTAURANT MODE ===
+  showRestaurantMode() {
+    const html = `
+      <div class="modal-overlay show" id="restaurant-modal">
+        <div class="recipe-detail-sheet" style="max-height:85vh;overflow-y:auto">
+          <div class="rd-header">
+            <button class="rd-close" id="restaurant-close">&times;</button>
+            <div class="rd-name">Eating Out</div>
+            <div class="rd-desc">Get macro estimates for restaurant meals</div>
+          </div>
+          <div style="padding:0 16px">
+            <input type="text" class="food-input" id="restaurant-name" placeholder="Restaurant name (optional)" style="margin-bottom:8px">
+            <textarea class="food-input" id="restaurant-items" rows="4" placeholder="Enter dish names (one per line)&#10;e.g. Chicken Caesar Salad&#10;Grilled Salmon&#10;Pasta Bolognese" style="resize:vertical;min-height:80px"></textarea>
+            <div class="restaurant-btn-row">
+              <button class="btn" id="restaurant-quick-btn" style="flex:1">Quick Estimate</button>
+              <button class="btn btn-outline" id="restaurant-ai-btn" style="flex:1">AI Estimate</button>
+            </div>
+          </div>
+          <div id="restaurant-results" style="padding:0 16px 16px"></div>
+        </div>
+      </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    UI.$('#restaurant-close')?.addEventListener('click', () => UI.$('#restaurant-modal')?.remove());
+    UI.$('#restaurant-modal')?.addEventListener('click', e => {
+      if (e.target.id === 'restaurant-modal') UI.$('#restaurant-modal')?.remove();
+    });
+
+    UI.$('#restaurant-quick-btn')?.addEventListener('click', () => this._restaurantEstimate(false));
+    UI.$('#restaurant-ai-btn')?.addEventListener('click', () => this._restaurantEstimate(true));
+  },
+
+  async _restaurantEstimate(useAI) {
+    const itemsText = UI.$('#restaurant-items')?.value?.trim();
+    const restaurant = UI.$('#restaurant-name')?.value?.trim() || '';
+    if (!itemsText && !restaurant) {
+      UI.toast('Enter dish names or a restaurant name', 'error');
+      return;
+    }
+
+    const items = itemsText ? itemsText.split('\n').map(l => l.trim()).filter(Boolean) : [];
+    const totals = Store.getTodayTotals();
+    const profile = Store.getProfile();
+    const remaining = {
+      calories: Math.max(0, profile.macros.calories - totals.calories),
+      protein: Math.max(0, profile.macros.protein - totals.protein),
+      carbs: Math.max(0, profile.macros.carbs - totals.carbs),
+      fat: Math.max(0, profile.macros.fat - totals.fat),
+    };
+
+    const resultsEl = UI.$('#restaurant-results');
+    resultsEl.innerHTML = '<div class="recipe-loading">Estimating...</div>';
+
+    try {
+      const endpoint = useAI ? '/api/tracker/restaurant' : '/api/tracker/restaurant-quick';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          restaurant,
+          items: items.length > 0 ? items : undefined,
+          remaining_macros: remaining,
+          goal: profile.goal || 'maintenance',
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Estimation failed');
+      }
+      const data = await res.json();
+      this._renderRestaurantResults(data, remaining);
+    } catch (err) {
+      resultsEl.innerHTML = `<div class="recipe-empty">${err.message}</div>`;
+    }
+  },
+
+  _renderRestaurantResults(data, remaining) {
+    const resultsEl = UI.$('#restaurant-results');
+    if (!resultsEl) return;
+
+    const estimates = data.estimates || [];
+    const bestPick = data.best_pick;
+
+    resultsEl.innerHTML = `
+      ${bestPick ? `
+        <div class="restaurant-best-pick">
+          <div class="restaurant-best-label">Best Pick</div>
+          <div class="restaurant-best-name">${bestPick.name}</div>
+          <div class="restaurant-best-reason">${bestPick.reason}</div>
+        </div>
+      ` : ''}
+      <div class="restaurant-estimates">
+        ${estimates.map((e, idx) => `
+          <div class="restaurant-item ${bestPick && e.name === bestPick.name ? 'is-best' : ''}">
+            <div class="restaurant-item-header">
+              <span class="restaurant-item-name">${e.name}</span>
+              ${e.macro_fit_score ? `<span class="restaurant-fit-score" style="--fit:${e.macro_fit_score}">${e.macro_fit_score}/10</span>` : ''}
+            </div>
+            <div class="suggestion-macros" style="margin:4px 0">
+              <span style="color:var(--cal-color)">${e.calories} cal</span>
+              <span style="color:var(--protein-color)">${e.protein}g P</span>
+              <span style="color:var(--carb-color)">${e.carbs}g C</span>
+              <span style="color:var(--fat-color)">${e.fat}g F</span>
+            </div>
+            ${e.portion_note ? `<div class="restaurant-note">${e.portion_note}</div>` : ''}
+            ${e.tip ? `<div class="restaurant-tip">${e.tip}</div>` : ''}
+            ${e.source ? `<div class="restaurant-source">${e.source === 'database' ? 'From database' : e.source === 'estimate' ? 'Estimated' : 'Approximate'}</div>` : ''}
+            <button class="btn btn-outline restaurant-log-btn" data-idx="${idx}" style="margin-top:6px;padding:6px 12px;font-size:12px">Log This</button>
+          </div>
+        `).join('')}
+      </div>
+      ${data.general_tips ? `
+        <div class="restaurant-tips">
+          ${data.general_tips.map(t => `<div class="restaurant-general-tip">${t}</div>`).join('')}
+        </div>
+      ` : ''}
+    `;
+
+    // Bind log buttons
+    resultsEl.querySelectorAll('.restaurant-log-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.idx);
+        const e = estimates[idx];
+        if (!e) return;
+        Store.addMeal({
+          time: new Date().toISOString(),
+          description: `${e.name} (restaurant)`,
+          items: [{ name: e.name, calories: e.calories, protein: e.protein, carbs: e.carbs, fat: e.fat, sugar_natural: 0, sugar_processed: 0, fiber: e.fiber || 0 }],
+          total: { calories: e.calories, protein: e.protein, carbs: e.carbs, fat: e.fat, sugar_natural: 0, sugar_processed: 0, fiber: e.fiber || 0 },
+        });
+        btn.textContent = 'Logged!';
+        btn.disabled = true;
+        UI.toast(`${e.name} logged!`, 'success');
+        App.refreshDashboard();
+      });
+    });
+  },
 };
