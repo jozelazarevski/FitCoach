@@ -2,10 +2,16 @@ const Tracker = {
   pendingParse: null,
   isListening: false,
   recognition: null,
+  selectedDate: null,
 
   renderFoodInput() {
     const hasSpeech = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+    const todayKey = Store.getTodayKey();
     return `
+      <div class="food-date-row">
+        <input type="date" class="food-date-picker" id="food-date" value="${todayKey}" max="${todayKey}">
+        <span class="food-date-label" id="food-date-label">Today</span>
+      </div>
       <div class="food-input-wrap">
         <input type="text" class="food-input" id="food-text" placeholder="What did you eat?">
         <button class="btn" id="btn-parse">Log</button>
@@ -38,6 +44,24 @@ const Tracker = {
   },
 
   bindFoodInput() {
+    // Date picker
+    this.selectedDate = null;
+    UI.$('#food-date')?.addEventListener('change', () => {
+      const val = UI.$('#food-date')?.value;
+      const todayKey = Store.getTodayKey();
+      const label = UI.$('#food-date-label');
+      if (val && val !== todayKey) {
+        this.selectedDate = val;
+        const d = new Date(val + 'T12:00:00');
+        label.textContent = d.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' });
+        label.classList.add('past-date');
+      } else {
+        this.selectedDate = null;
+        label.textContent = 'Today';
+        label.classList.remove('past-date');
+      }
+    });
+
     UI.$('#btn-parse')?.addEventListener('click', () => this.handleParse());
     UI.$('#food-text')?.addEventListener('keydown', e => {
       if (e.key === 'Enter') this.handleParse();
@@ -472,25 +496,35 @@ const Tracker = {
   confirmMeal() {
     if (!this.pendingParse) return;
 
+    const dateKey = this.selectedDate || null;
+    const timeStr = dateKey
+      ? new Date(dateKey + 'T12:00:00').toISOString()
+      : new Date().toISOString();
+
     const meal = {
-      time: new Date().toISOString(),
+      time: timeStr,
       description: this.pendingParse.description,
       items: this.pendingParse.items,
       total: this.pendingParse.total
     };
 
-    Store.addMeal(meal);
+    Store.addMeal(meal, dateKey);
     UI.hide('#parse-result');
     UI.$('#food-text').value = '';
     this.pendingParse = null;
 
-    UI.toast('Meal logged!', 'success');
+    const label = dateKey
+      ? new Date(dateKey + 'T12:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' })
+      : 'today';
+    UI.toast(`Meal logged for ${label}!`, 'success');
     App.refreshDashboard();
 
-    // Show "How do you feel?" prompt after a short delay
-    const todayMeals = Store.getTodayMeals();
-    const mealIndex = todayMeals.length - 1;
-    setTimeout(() => this.showFeelingPrompt(Store.getTodayKey(), mealIndex, meal.description), 500);
+    // Show feeling prompt only for today's meals
+    if (!dateKey) {
+      const todayMeals = Store.getTodayMeals();
+      const mealIndex = todayMeals.length - 1;
+      setTimeout(() => this.showFeelingPrompt(Store.getTodayKey(), mealIndex, meal.description), 500);
+    }
   },
 
   // === POST-MEAL FEELING TRACKER ===

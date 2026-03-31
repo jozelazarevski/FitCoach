@@ -108,17 +108,18 @@ const Store = {
     return data.logs[key]?.meals || [];
   },
 
-  addMeal(meal) {
+  addMeal(meal, dateKey) {
     const data = this.load();
-    const key = this.getTodayKey();
+    const key = dateKey || this.getTodayKey();
     if (!data.logs[key]) data.logs[key] = { meals: [] };
+
     data.logs[key].meals.push(meal);
     this.save(data);
   },
 
-  deleteMeal(index) {
+  deleteMeal(index, dateKey) {
     const data = this.load();
-    const key = this.getTodayKey();
+    const key = dateKey || this.getTodayKey();
     if (data.logs[key]?.meals) {
       data.logs[key].meals.splice(index, 1);
       this.save(data);
