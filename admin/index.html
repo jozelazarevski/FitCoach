@@ -135,6 +135,7 @@
       <div class="nav-tab active" data-tab="dashboard">Dashboard</div>
       <div class="nav-tab" data-tab="recipes">Recipes</div>
       <div class="nav-tab" data-tab="tags">Tags</div>
+      <div class="nav-tab" data-tab="users">Users</div>
       <div class="nav-tab" data-tab="apikeys">API Keys</div>
       <div class="nav-tab" data-tab="generate">Generate</div>
       <div class="nav-tab" data-tab="savings">LLM Savings</div>
@@ -225,6 +226,11 @@
     </div>
   </div>
 
+  <!-- User Detail Modal -->
+  <div class="modal-overlay" id="user-modal">
+    <div class="modal" id="user-modal-content" style="max-width:700px"></div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
   <script>
@@ -305,6 +311,7 @@
         switch (tab) {
           case 'dashboard': await renderDashboard(el); break;
           case 'recipes': await renderRecipes(el); break;
+          case 'users': await renderUsers(el); break;
           case 'tags': await renderTags(el); break;
           case 'apikeys': await renderApiKeys(el); break;
           case 'generate': await renderGenerate(el); break;
@@ -895,6 +902,228 @@
         </div>
       `;
     }
+
+    // Users
+    const goalLabels = {fat_loss:'Fat Loss',aggressive_fat_loss:'Aggressive Cut',muscle_gain:'Muscle Gain',lean_bulk:'Lean Bulk',maintain:'Maintain',recomp:'Recomp'};
+    const activityLabels = {sedentary:'Sedentary',light:'Light',moderate:'Moderate',active:'Active',very_active:'Athlete'};
+
+    async function renderUsers(el, page = 1) {
+      const search = document.getElementById('user-search')?.value || '';
+      let qs = `?page=${page}&per_page=25`;
+      if (search) qs += `&search=${encodeURIComponent(search)}`;
+
+      const [data, stats] = await Promise.all([
+        api(`/users${qs}`),
+        api('/users/stats')
+      ]);
+
+      const topGoals = Object.entries(stats.by_goal || {}).slice(0, 6);
+      const topDiets = Object.entries(stats.by_diet || {}).slice(0, 6);
+      const topConditions = Object.entries(stats.by_condition || {}).slice(0, 8);
+
+      el.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h2>Users</h2>
+          <button class="btn btn-outline btn-sm" onclick="renderTab('users')">Refresh</button>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-label">Total Users</div><div class="stat-value accent">${stats.total_users}</div></div>
+          <div class="stat-card"><div class="stat-label">Active (7 days)</div><div class="stat-value green">${stats.active_last_7d}</div></div>
+          <div class="stat-card"><div class="stat-label">New This Week</div><div class="stat-value blue">${stats.new_this_week}</div></div>
+          <div class="stat-card"><div class="stat-label">With Profiles</div><div class="stat-value yellow">${stats.with_profiles}</div></div>
+        </div>
+
+        ${topGoals.length > 0 || topDiets.length > 0 || topConditions.length > 0 ? `
+        <div class="stats-grid" style="margin-bottom:16px">
+          ${topGoals.length > 0 ? `
+          <div class="table-wrap">
+            <div class="table-header"><h2>By Goal</h2></div>
+            <table><tbody>${topGoals.map(([k, v]) => `<tr><td>${goalLabels[k] || k}</td><td style="color:var(--dim)">${v}</td></tr>`).join('')}</tbody></table>
+          </div>` : ''}
+          ${topDiets.length > 0 ? `
+          <div class="table-wrap">
+            <div class="table-header"><h2>By Diet</h2></div>
+            <table><tbody>${topDiets.map(([k, v]) => `<tr><td>${k.replace(/_/g, ' ')}</td><td style="color:var(--dim)">${v}</td></tr>`).join('')}</tbody></table>
+          </div>` : ''}
+          ${topConditions.length > 0 ? `
+          <div class="table-wrap">
+            <div class="table-header"><h2>Top Health Conditions</h2></div>
+            <table><tbody>${topConditions.map(([k, v]) => `<tr><td>${k.replace(/_/g, ' ')}</td><td style="color:var(--dim)">${v}</td></tr>`).join('')}</tbody></table>
+          </div>` : ''}
+        </div>` : ''}
+
+        <div class="filter-bar">
+          <input type="text" id="user-search" placeholder="Search by email or name..." value="${search}">
+          <button class="btn btn-primary btn-sm" id="btn-user-filter">Search</button>
+        </div>
+
+        <div class="table-wrap">
+          <div class="table-header"><h2>All Users (${data.total})</h2></div>
+          <table>
+            <thead><tr><th>ID</th><th>Email</th><th>Name</th><th>Goal</th><th>Cal Target</th><th>Days Logged</th><th>Meals</th><th>Joined</th><th></th></tr></thead>
+            <tbody>
+              ${data.users.map(u => `
+                <tr>
+                  <td>${u.id}</td>
+                  <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.email}</td>
+                  <td>${u.name || '<span style="color:var(--dim)">—</span>'}</td>
+                  <td>${u.goal ? `<span class="badge badge-blue">${goalLabels[u.goal] || u.goal}</span>` : '<span style="color:var(--dim)">—</span>'}</td>
+                  <td>${u.target_calories || '<span style="color:var(--dim)">—</span>'}</td>
+                  <td>${u.total_days_logged}</td>
+                  <td>${u.total_meals_logged}</td>
+                  <td style="font-size:12px">${u.created_at?.split('T')[0] || u.created_at?.split(' ')[0] || ''}</td>
+                  <td>
+                    <button class="btn btn-outline btn-sm btn-view-user" data-id="${u.id}">View</button>
+                    <button class="btn btn-danger btn-sm btn-del-user" data-id="${u.id}" data-email="${u.email}">Del</button>
+                  </td>
+                </tr>
+              `).join('')}
+              ${data.users.length === 0 ? '<tr><td colspan="9" style="text-align:center;color:var(--dim)">No users found</td></tr>' : ''}
+            </tbody>
+          </table>
+          ${data.pages > 1 ? `
+            <div class="pagination">
+              ${Array.from({length: Math.min(data.pages, 10)}, (_, i) => i + 1).map(p =>
+                `<button class="page-btn ${p===page?'active':''}" data-page="${p}">${p}</button>`
+              ).join('')}
+              ${data.pages > 10 ? `<span style="color:var(--dim)">... ${data.pages}</span>` : ''}
+            </div>
+          ` : ''}
+        </div>
+      `;
+
+      document.getElementById('btn-user-filter').onclick = () => renderUsers(el, 1);
+      document.getElementById('user-search').onkeydown = e => { if (e.key === 'Enter') renderUsers(el, 1); };
+      el.querySelectorAll('.page-btn').forEach(b => b.onclick = () => renderUsers(el, +b.dataset.page));
+
+      el.querySelectorAll('.btn-view-user').forEach(b => {
+        b.onclick = () => openUserDetail(+b.dataset.id);
+      });
+
+      el.querySelectorAll('.btn-del-user').forEach(b => {
+        b.onclick = async () => {
+          if (!confirm(`Delete user ${b.dataset.email}? This cannot be undone.`)) return;
+          try {
+            await api(`/users/${b.dataset.id}`, { method: 'DELETE' });
+            toast('User deleted');
+            renderUsers(el, page);
+          } catch (e) { toast(e.message, true); }
+        };
+      });
+    }
+
+    async function openUserDetail(userId) {
+      const modal = document.getElementById('user-modal');
+      const content = document.getElementById('user-modal-content');
+      content.innerHTML = '<p style="color:var(--dim)">Loading...</p>';
+      modal.classList.add('show');
+
+      try {
+        const u = await api(`/users/${userId}`);
+        const p = u.profile || {};
+        const conditions = p.healthConditions || [];
+        const diets = (p.dietaryPreferences || {}).dietaryStyle || [];
+        const macros = p.macros || {};
+
+        content.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+            <div>
+              <h2>${u.name || u.email}</h2>
+              <div style="font-size:13px;color:var(--dim)">${u.email} · Joined ${u.created_at?.split('T')[0] || u.created_at?.split(' ')[0] || ''}</div>
+            </div>
+            <button class="btn btn-outline btn-sm" id="btn-close-user">&times;</button>
+          </div>
+
+          <div class="stats-grid" style="margin-bottom:16px">
+            <div class="stat-card"><div class="stat-label">Days Logged</div><div class="stat-value accent">${u.total_days_logged}</div></div>
+            <div class="stat-card"><div class="stat-label">Total Meals</div><div class="stat-value green">${u.total_meals_logged}</div></div>
+            <div class="stat-card"><div class="stat-label">Body Entries</div><div class="stat-value blue">${u.body_entries}</div></div>
+            <div class="stat-card"><div class="stat-label">Workout Days</div><div class="stat-value yellow">${u.workout_days}</div></div>
+          </div>
+
+          ${p.weight ? `
+          <div class="table-wrap" style="margin-bottom:16px">
+            <div class="table-header"><h2>Profile</h2></div>
+            <table><tbody>
+              <tr><td>Stats</td><td>${p.weight}${p.unit === 'metric' ? 'kg' : 'lbs'}, ${p.height}${p.unit === 'metric' ? 'cm' : 'in'}, ${p.age}yo, ${p.gender || '—'}</td></tr>
+              <tr><td>Goal</td><td><span class="badge badge-blue">${goalLabels[p.goal] || p.goal || '—'}</span></td></tr>
+              <tr><td>Activity</td><td>${activityLabels[p.activityLevel] || p.activityLevel || '—'}</td></tr>
+              <tr><td>Target</td><td>${macros.calories || 0} cal · ${macros.protein || 0}g P · ${macros.carbs || 0}g C · ${macros.fat || 0}g F</td></tr>
+              ${conditions.length > 0 ? `<tr><td>Health</td><td>${conditions.map(c => `<span class="badge badge-yellow" style="margin:2px">${c.replace(/_/g, ' ')}</span>`).join('')}</td></tr>` : ''}
+              ${diets.length > 0 ? `<tr><td>Diet</td><td>${diets.map(d => `<span class="badge badge-green" style="margin:2px">${d.replace(/_/g, ' ')}</span>`).join('')}</td></tr>` : ''}
+            </tbody></table>
+          </div>` : '<div style="padding:12px;color:var(--dim);font-size:13px;margin-bottom:16px">No profile data — user hasn\'t completed onboarding.</div>'}
+
+          ${u.daily_summary && u.daily_summary.length > 0 ? `
+          <div class="table-wrap" style="margin-bottom:16px">
+            <div class="table-header"><h2>Recent Activity (last 7 days)</h2></div>
+            <table>
+              <thead><tr><th>Date</th><th>Meals</th><th>Calories</th><th>Protein</th></tr></thead>
+              <tbody>
+                ${u.daily_summary.map(d => `
+                  <tr>
+                    <td>${d.date}</td>
+                    <td>${d.meals}</td>
+                    <td>${d.calories}</td>
+                    <td>${d.protein}g</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>` : ''}
+
+          ${(u.preferences.liked.length > 0 || u.preferences.disliked.length > 0) ? `
+          <div class="table-wrap" style="margin-bottom:16px">
+            <div class="table-header"><h2>Food Preferences</h2></div>
+            <table><tbody>
+              ${u.preferences.liked.length > 0 ? `<tr><td style="color:var(--green)">Liked</td><td>${u.preferences.liked.join(', ')}</td></tr>` : ''}
+              ${u.preferences.disliked.length > 0 ? `<tr><td style="color:var(--red)">Disliked</td><td>${u.preferences.disliked.join(', ')}</td></tr>` : ''}
+            </tbody></table>
+          </div>` : ''}
+
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <span style="font-size:12px;color:var(--dim)">${u.session_count} session${u.session_count !== 1 ? 's' : ''} · Last updated ${u.updated_at?.split('T')[0] || u.updated_at?.split(' ')[0] || 'never'}</span>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+            <button class="btn btn-outline btn-sm" id="btn-revoke-sessions" data-id="${u.id}">Revoke Sessions</button>
+            <button class="btn btn-danger btn-sm" id="btn-delete-user-modal" data-id="${u.id}" data-email="${u.email}">Delete User</button>
+            <button class="btn btn-outline btn-sm" id="btn-close-user-bottom">Close</button>
+          </div>
+        `;
+
+        document.getElementById('btn-close-user').onclick = () => modal.classList.remove('show');
+        document.getElementById('btn-close-user-bottom').onclick = () => modal.classList.remove('show');
+
+        document.getElementById('btn-revoke-sessions').onclick = async () => {
+          if (!confirm('Revoke all sessions? The user will be logged out everywhere.')) return;
+          try {
+            await api(`/users/${userId}/sessions`, { method: 'DELETE' });
+            toast('Sessions revoked');
+            openUserDetail(userId);
+          } catch (e) { toast(e.message, true); }
+        };
+
+        document.getElementById('btn-delete-user-modal').onclick = async () => {
+          const email = document.getElementById('btn-delete-user-modal').dataset.email;
+          if (!confirm(`Permanently delete ${email}? This cannot be undone.`)) return;
+          try {
+            await api(`/users/${userId}`, { method: 'DELETE' });
+            toast('User deleted');
+            modal.classList.remove('show');
+            renderTab('users');
+          } catch (e) { toast(e.message, true); }
+        };
+
+      } catch (e) {
+        content.innerHTML = `<p style="color:var(--red)">${e.message}</p><button class="btn btn-outline btn-sm" onclick="document.getElementById('user-modal').classList.remove('show')">Close</button>`;
+      }
+    }
+
+    document.getElementById('user-modal').onclick = e => {
+      if (e.target.id === 'user-modal') document.getElementById('user-modal').classList.remove('show');
+    };
 
     // Init
     if (token) {
