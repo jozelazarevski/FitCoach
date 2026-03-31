@@ -208,3 +208,104 @@ def adaptive_targets():
         'adjustments': adjustments,
         'weight_insight': weight_insight,
     })
+
+
+@coach_bp.route('/streaks', methods=['POST'])
+def streaks():
+    """Compute streak and badge data from user's log history.
+
+    Accepts: logged_days (sorted desc date strings), daily_totals (list of
+    {date, calories, protein, ...}), targets, water_today_ml.
+    """
+    data = request.get_json() or {}
+
+    logged_days = data.get('logged_days', [])
+    daily_totals = data.get('daily_totals', [])
+    targets = data.get('targets', {})
+    water_ml = data.get('water_today_ml', 0)
+    water_target = data.get('water_target_ml', 2300)
+    unique_foods = data.get('unique_food_count', 0)
+
+    # Logging streak
+    streak = _compute_logging_streak(logged_days)
+
+    # Weekly badges
+    badges = []
+    recent_7 = daily_totals[:7] if daily_totals else []
+    protein_hits = sum(
+        1 for d in recent_7
+        if d.get('calories', 0) > 0
+        and targets.get('protein')
+        and d.get('protein', 0) >= targets['protein'] * 0.9
+    )
+    calorie_hits = sum(
+        1 for d in recent_7
+        if d.get('calories', 0) > 0
+        and targets.get('calories')
+        and 0.9 <= d['calories'] / targets['calories'] <= 1.1
+    )
+    logged_count = sum(1 for d in recent_7 if d.get('calories', 0) > 0)
+
+    if protein_hits >= 5:
+        badges.append({'icon': 'muscle', 'name': 'Protein Pro', 'desc': f'Hit protein target {protein_hits}/7 days'})
+    elif protein_hits >= 3:
+        badges.append({'icon': 'trophy', 'name': 'Protein Rising', 'desc': f'Hit protein target {protein_hits}/7 days'})
+
+    if calorie_hits >= 5:
+        badges.append({'icon': 'target', 'name': 'Calorie Sniper', 'desc': f'On calorie target {calorie_hits}/7 days'})
+
+    if logged_count >= 7:
+        badges.append({'icon': 'notebook', 'name': 'Full Week Logger', 'desc': 'Logged every day this week'})
+
+    if water_target > 0 and water_ml >= water_target:
+        badges.append({'icon': 'water', 'name': 'Hydrated', 'desc': 'Hit water target today'})
+
+    # Milestones
+    milestones = []
+    total = len(logged_days)
+    streak_levels = [(100, '100-Day Streak'), (30, '30-Day Streak'), (14, '2-Week Streak'), (7, '7-Day Streak'), (3, '3-Day Streak')]
+    for days, name in streak_levels:
+        if streak >= days:
+            milestones.append({'name': name, 'type': 'streak'})
+            break
+
+    total_levels = [(365, '1 Year of Tracking'), (100, '100 Days Tracked'), (30, '30 Days Tracked'), (7, 'First Week')]
+    for days, name in total_levels:
+        if total >= days:
+            milestones.append({'name': name, 'type': 'total'})
+            break
+
+    if unique_foods >= 100:
+        milestones.append({'name': '100 Different Foods', 'type': 'variety'})
+    elif unique_foods >= 50:
+        milestones.append({'name': '50 Different Foods', 'type': 'variety'})
+
+    return jsonify({
+        'streak': streak,
+        'total_days': total,
+        'water': {'current': water_ml, 'target': water_target, 'percent': min(round(water_ml / water_target * 100), 100) if water_target else 0},
+        'badges': badges,
+        'milestones': milestones,
+    })
+
+
+def _compute_logging_streak(logged_days):
+    """Count consecutive days with logs ending today or yesterday."""
+    if not logged_days:
+        return 0
+
+    day_set = set(logged_days)
+    today = datetime.now().strftime('%Y-%m-%d')
+    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+    start = today if today in day_set else (yesterday if yesterday in day_set else None)
+    if not start:
+        return 0
+
+    streak = 0
+    d = datetime.strptime(start, '%Y-%m-%d')
+    while d.strftime('%Y-%m-%d') in day_set:
+        streak += 1
+        d -= timedelta(days=1)
+
+    return streak

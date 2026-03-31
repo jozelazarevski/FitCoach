@@ -2044,6 +2044,57 @@ html, body {
 .insights-stat-val { font-weight: 700; color: var(--text); }
 .insights-stat-label { color: var(--text-dim); }
 
+/* Streak & Habit Tracking */
+.streak-card { text-align: center; }
+.streak-row {
+  display: flex; justify-content: space-around; align-items: center;
+  margin: 16px 0; gap: 8px;
+}
+.streak-counter { text-align: center; }
+.streak-flame { font-size: 28px; line-height: 1; }
+.streak-number { font-size: 24px; font-weight: 800; color: var(--text); margin-top: 2px; }
+.streak-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.streak-water { text-align: center; }
+.streak-water-ring {
+  width: 56px; height: 56px; border-radius: 50%; margin: 0 auto;
+  background: conic-gradient(
+    #60a5fa calc(var(--water-pct) * 1%),
+    rgba(255,255,255,0.08) calc(var(--water-pct) * 1%)
+  );
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.streak-water-ring::before {
+  content: ''; position: absolute; inset: 4px; border-radius: 50%;
+  background: var(--card-bg);
+}
+.streak-water-val {
+  position: relative; z-index: 1; font-size: 13px; font-weight: 700; color: #60a5fa;
+}
+
+.streak-badges {
+  display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+  margin: 12px 0; text-align: left;
+}
+.streak-badge {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 10px;
+  background: rgba(255,255,255,0.04); font-size: 12px;
+}
+.streak-badge-icon { font-size: 18px; }
+.streak-badge-name { font-weight: 700; color: var(--text); }
+.streak-badge-desc { font-size: 10px; color: var(--text-dim); }
+
+.streak-milestones {
+  display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+  margin-top: 8px;
+}
+.streak-milestone {
+  font-size: 11px; padding: 3px 8px; border-radius: 10px;
+  background: rgba(245,158,11,0.1); color: #fbbf24; font-weight: 600;
+}
+
 /* ============================================ */
 /* ENHANCED SUGGESTION CARDS                    */
 /* ============================================ */
