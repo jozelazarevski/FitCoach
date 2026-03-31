@@ -17,6 +17,7 @@ from backend.api.admin import admin_bp
 from backend.api.auth import auth_bp
 from backend.api.coach import coach_bp
 from backend.api.recipes import recipes_bp
+from backend.api.tracker import tracker_bp
 from backend.db import init_db
 from backend.logging_config import setup_logging
 from config import CORS_ORIGINS, ENVIRONMENT, SECRET_KEY
@@ -36,6 +37,7 @@ app.register_blueprint(auth_bp, url_prefix='/api/auth')
 app.register_blueprint(recipes_bp, url_prefix='/api/recipes')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
 app.register_blueprint(coach_bp, url_prefix='/api/coach')
+app.register_blueprint(tracker_bp, url_prefix='/api/tracker')
 
 logger = logging.getLogger(__name__)
 
