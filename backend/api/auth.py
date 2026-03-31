@@ -46,10 +46,18 @@ def register():
     password = data.get('password', '')
     name = (data.get('name') or '').strip()
 
-    if not email or '@' not in email:
-        return jsonify({'error': 'Valid email required'}), 400
+    if not email or '@' not in email or '.' not in email.split('@')[-1]:
+        return jsonify({'error': 'Please enter a valid email address'}), 400
+    if len(email) > 254:
+        return jsonify({'error': 'Email address is too long'}), 400
+    if not name:
+        return jsonify({'error': 'Name is required'}), 400
+    if len(name) > 100:
+        return jsonify({'error': 'Name is too long (max 100 characters)'}), 400
     if len(password) < 6:
         return jsonify({'error': 'Password must be at least 6 characters'}), 400
+    if len(password) > 128:
+        return jsonify({'error': 'Password is too long (max 128 characters)'}), 400
 
     password_hash = _hash_password(password)
 

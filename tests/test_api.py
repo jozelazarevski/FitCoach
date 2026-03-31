@@ -51,7 +51,7 @@ def test_login_valid(client):
     """Login with correct credentials returns a token."""
     client.post(
         "/api/auth/register",
-        json={"email": "login@test.com", "password": "secret123"},
+        json={"email": "login@test.com", "password": "secret123", "name": "Login"},
         content_type="application/json",
     )
     resp = client.post(
@@ -67,7 +67,7 @@ def test_login_invalid(client):
     """Login with wrong password returns 401."""
     client.post(
         "/api/auth/register",
-        json={"email": "bad@test.com", "password": "secret123"},
+        json={"email": "bad@test.com", "password": "secret123", "name": "Bad"},
         content_type="application/json",
     )
     resp = client.post(
