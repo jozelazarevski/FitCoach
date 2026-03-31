@@ -9,6 +9,66 @@ const Coach = {
   lastRecipeResults: null,
   _dbReady: false,
 
+  _detectMealType() {
+    const hour = new Date().getHours();
+    if (hour < 10) return 'breakfast';
+    if (hour < 14) return 'lunch';
+    if (hour < 17) return 'snack';
+    return 'dinner';
+  },
+
+  _getCoachInsight(profile, totals, remaining, todayMeals) {
+    const hour = new Date().getHours();
+    const mealType = this._detectMealType();
+    const mealsLeft = mealType === 'dinner' ? 1 : mealType === 'snack' ? 2 : mealType === 'lunch' ? 2 : 3;
+    const insights = [];
+
+    // Protein urgency
+    if (remaining.protein > 40 && mealsLeft <= 2) {
+      insights.push(`You're ${remaining.protein}g short on protein with ${mealsLeft} meal${mealsLeft > 1 ? 's' : ''} left. Prioritize high-protein options.`);
+    }
+
+    // Calorie budget
+    if (remaining.calories < 300 && mealsLeft >= 2) {
+      insights.push(`Only ${remaining.calories} cal left but ${mealsLeft} meals to go. Keep it light - lean protein and veggies.`);
+    } else if (remaining.calories > 800 && hour > 17) {
+      insights.push(`You have ${remaining.calories} cal still available. A hearty dinner is fine.`);
+    }
+
+    // Ate nothing yet
+    if (todayMeals.length === 0 && hour > 10) {
+      insights.push(`You haven't logged anything yet today. Start with a balanced ${mealType} to fuel up.`);
+    }
+
+    // Variety check from week
+    const weekMeals = this._getWeekMealNames();
+    if (weekMeals.length > 5) {
+      const freq = {};
+      weekMeals.forEach(n => { freq[n] = (freq[n] || 0) + 1; });
+      const repeated = Object.entries(freq).filter(([, c]) => c >= 3).map(([n]) => n);
+      if (repeated.length > 0) {
+        insights.push(`You've had ${repeated[0]} ${freq[repeated[0]]} times this week. Let's mix it up!`);
+      }
+    }
+
+    return insights.length > 0 ? insights[0] : `Based on your macros and the time of day, here's what I'd suggest for ${mealType}.`;
+  },
+
+  _getWeekMealNames() {
+    const names = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      const dayLogs = Store.load().logs[key] || [];
+      dayLogs.forEach(m => {
+        if (m.description) names.push(m.description);
+        else if (m.items) m.items.forEach(it => names.push(it.name || ''));
+      });
+    }
+    return names.filter(Boolean);
+  },
+
   renderCoachScreen() {
     const profile = Store.getProfile();
     const totals = Store.getTodayTotals();
@@ -20,36 +80,53 @@ const Coach = {
     };
     const prefs = Store.getPreferences();
 
-    // Build coaching context summary
-    const condCount = (profile.healthConditions || []).length;
-    const dislikedCount = (prefs.disliked || []).length;
+    // Smart context
+    const autoMealType = this._detectMealType();
+    const todayMeals = Store.getTodayMeals ? Store.getTodayMeals() : [];
+    const insight = this._getCoachInsight(profile, totals, remaining, todayMeals);
     const goalLabel = Profile.goalLabels?.[profile.goal] || profile.goal;
-    const contextParts = [goalLabel];
-    if (condCount > 0) contextParts.push(`${condCount} health condition${condCount > 1 ? 's' : ''}`);
-    contextParts.push(`${remaining.calories} cal remaining`);
-    if (dislikedCount > 0) contextParts.push(`avoiding ${dislikedCount} food${dislikedCount > 1 ? 's' : ''}`);
-    const contextSummary = contextParts.join(' · ');
+
+    // Today's meals summary
+    const todayMealsSummary = todayMeals.map(m => {
+      const desc = m.description || (m.items ? m.items.map(i => i.name).join(', ') : 'Meal');
+      const cal = m.total?.calories || 0;
+      return { desc, cal };
+    });
 
     const screen = UI.$('#screen-coach');
     screen.innerHTML = `
-      <div class="coach-context-summary">Coaching for ${profile.name || 'you'}: ${contextSummary}</div>
+      <div class="coach-insight-card card">
+        <div class="coach-insight-icon">&#129504;</div>
+        <div class="coach-insight-text">${UI.esc(insight)}</div>
+      </div>
+
       <div class="card">
-        <div class="card-title">Remaining Today</div>
-        <div class="macro-grid">
-          <div class="macro-item full-width">
-            <div class="macro-label"><span>Calories</span></div>
-            <div class="macro-value" style="color:var(--cal-color)">${remaining.calories} <span>cal left</span></div>
+        <div class="card-title">Your Day So Far</div>
+        ${todayMealsSummary.length > 0 ? `
+          <div class="coach-today-meals">
+            ${todayMealsSummary.map(m => `
+              <div class="coach-today-item">
+                <span class="coach-today-name">${UI.esc(m.desc)}</span>
+                <span class="coach-today-cal">${m.cal} cal</span>
+              </div>
+            `).join('')}
+          </div>
+        ` : '<div class="coach-today-empty">Nothing logged yet today</div>'}
+        <div class="macro-grid" style="margin-top:10px">
+          <div class="macro-item">
+            <div class="macro-label"><span>Calories left</span></div>
+            <div class="macro-value" style="color:var(--cal-color)">${remaining.calories}</div>
           </div>
           <div class="macro-item">
-            <div class="macro-label"><span>Protein</span></div>
+            <div class="macro-label"><span>Protein left</span></div>
             <div class="macro-value" style="color:var(--protein-color)">${remaining.protein}g</div>
           </div>
           <div class="macro-item">
-            <div class="macro-label"><span>Carbs</span></div>
+            <div class="macro-label"><span>Carbs left</span></div>
             <div class="macro-value" style="color:var(--carb-color)">${remaining.carbs}g</div>
           </div>
-          <div class="macro-item full-width">
-            <div class="macro-label"><span>Fat</span></div>
+          <div class="macro-item">
+            <div class="macro-label"><span>Fat left</span></div>
             <div class="macro-value" style="color:var(--fat-color)">${remaining.fat}g</div>
           </div>
         </div>
@@ -58,39 +135,45 @@ const Coach = {
       <div class="card">
         <div class="card-title">What meal is this for?</div>
         <div class="meal-type-pills" id="meal-type-pills">
-          <button class="meal-type-pill" data-type="breakfast">Breakfast</button>
-          <button class="meal-type-pill" data-type="lunch">Lunch</button>
-          <button class="meal-type-pill" data-type="snack">Snack</button>
-          <button class="meal-type-pill" data-type="dinner">Dinner</button>
+          <button class="meal-type-pill ${autoMealType === 'breakfast' ? 'active' : ''}" data-type="breakfast">Breakfast</button>
+          <button class="meal-type-pill ${autoMealType === 'lunch' ? 'active' : ''}" data-type="lunch">Lunch</button>
+          <button class="meal-type-pill ${autoMealType === 'snack' ? 'active' : ''}" data-type="snack">Snack</button>
+          <button class="meal-type-pill ${autoMealType === 'dinner' ? 'active' : ''}" data-type="dinner">Dinner</button>
           <button class="meal-type-pill" data-type="pre_workout">Pre-Workout</button>
           <button class="meal-type-pill" data-type="post_workout">Post-Workout</button>
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-title">Dietary Style (optional)</div>
-        <div class="meal-type-pills" id="diet-filter-pills">
-          <button class="meal-type-pill diet-pill" data-filter="vegan">Vegan</button>
-          <button class="meal-type-pill diet-pill" data-filter="vegetarian">Vegetarian</button>
-          <button class="meal-type-pill diet-pill" data-filter="keto">Keto</button>
-          <button class="meal-type-pill diet-pill" data-filter="low_carb">Low Carb</button>
-          <button class="meal-type-pill diet-pill" data-filter="high_protein">High Protein</button>
-          <button class="meal-type-pill diet-pill" data-filter="paleo">Paleo</button>
-          <button class="meal-type-pill diet-pill" data-filter="gluten_free">Gluten Free</button>
-          <button class="meal-type-pill diet-pill" data-filter="dairy_free">Dairy Free</button>
-          <button class="meal-type-pill diet-pill" data-filter="mediterranean">Mediterranean</button>
-          <button class="meal-type-pill diet-pill" data-filter="whole30">Whole30</button>
-        </div>
-      </div>
+      <button class="btn btn-coach" id="btn-ai-suggest">
+        What should I eat?
+      </button>
 
-      <div class="card">
-        <div class="card-title">Cuisine (optional)</div>
-        <div class="meal-type-pills" id="cuisine-filter-pills"></div>
-      </div>
+      <button class="btn btn-outline btn-full" id="btn-find-recipes" style="margin-top:8px">
+        Browse Recipe Database
+      </button>
 
-      <div class="card filter-collapse-wrap">
-        <button class="filter-collapse-toggle" id="btn-more-filters">More Filters <span class="toggle-arrow">&#9662;</span></button>
+      <div class="card filter-collapse-wrap" style="margin-top:8px">
+        <button class="filter-collapse-toggle" id="btn-more-filters">Filters & Preferences <span class="toggle-arrow">&#9662;</span></button>
         <div class="filter-collapse-content" id="more-filters">
+          <div style="margin-bottom:12px">
+            <div class="card-title" style="margin-bottom:8px">Dietary Style</div>
+            <div class="meal-type-pills" id="diet-filter-pills">
+              <button class="meal-type-pill diet-pill" data-filter="vegan">Vegan</button>
+              <button class="meal-type-pill diet-pill" data-filter="vegetarian">Vegetarian</button>
+              <button class="meal-type-pill diet-pill" data-filter="keto">Keto</button>
+              <button class="meal-type-pill diet-pill" data-filter="low_carb">Low Carb</button>
+              <button class="meal-type-pill diet-pill" data-filter="high_protein">High Protein</button>
+              <button class="meal-type-pill diet-pill" data-filter="paleo">Paleo</button>
+              <button class="meal-type-pill diet-pill" data-filter="gluten_free">Gluten Free</button>
+              <button class="meal-type-pill diet-pill" data-filter="dairy_free">Dairy Free</button>
+              <button class="meal-type-pill diet-pill" data-filter="mediterranean">Mediterranean</button>
+              <button class="meal-type-pill diet-pill" data-filter="whole30">Whole30</button>
+            </div>
+          </div>
+          <div style="margin-bottom:12px">
+            <div class="card-title" style="margin-bottom:8px">Cuisine</div>
+            <div class="meal-type-pills" id="cuisine-filter-pills"></div>
+          </div>
           <div style="margin-bottom:12px">
             <div class="card-title" style="margin-bottom:8px">Max Cook Time</div>
             <div class="meal-type-pills" id="time-filter-pills">
@@ -100,7 +183,7 @@ const Coach = {
               <button class="meal-type-pill time-pill active" data-time="0">Any</button>
             </div>
           </div>
-          <div>
+          <div style="margin-bottom:12px">
             <div class="card-title" style="margin-bottom:8px">Difficulty</div>
             <div class="meal-type-pills" id="difficulty-filter-pills">
               <button class="meal-type-pill diff-pill" data-diff="easy">Easy</button>
@@ -109,35 +192,23 @@ const Coach = {
               <button class="meal-type-pill diff-pill active" data-diff="">Any</button>
             </div>
           </div>
+          <div style="margin-bottom:12px">
+            <div class="card-title" style="margin-bottom:8px">Extra Instructions</div>
+            <input type="text" class="food-input" id="coach-custom" placeholder="e.g. quick to prepare, no fish, under 10 min...">
+          </div>
+          <div>
+            <div class="card-title" style="margin-bottom:8px">My Pantry</div>
+            <div class="food-input-wrap">
+              <input type="text" class="food-input" id="pantry-input" placeholder="Add ingredient (e.g. chicken, rice, eggs...)">
+              <button class="btn" id="btn-add-pantry" style="padding:10px 16px">Add</button>
+            </div>
+            <div class="prefs-tags" id="pantry-tags" style="margin-top:8px">
+              ${Store.getPantry().map(item => `<span class="pref-tag pref-liked">${item} <button class="pantry-remove" data-item="${item}">&times;</button></span>`).join('')}
+            </div>
+            ${Store.getPantry().length > 0 ? `<label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:var(--text-dim);cursor:pointer"><input type="checkbox" id="chk-pantry-only"> Only suggest meals I can make with these ingredients</label>` : ''}
+          </div>
         </div>
       </div>
-
-      <div class="card">
-        <div class="card-title">Extra Instructions (optional)</div>
-        <input type="text" class="food-input" id="coach-custom" placeholder="e.g. quick to prepare, no fish, under 10 min...">
-      </div>
-
-      <div class="card">
-        <div class="card-title">My Pantry / Ingredients I Have</div>
-        <div class="food-input-wrap">
-          <input type="text" class="food-input" id="pantry-input" placeholder="Add ingredient (e.g. chicken, rice, eggs...)">
-          <button class="btn" id="btn-add-pantry" style="padding:10px 16px">Add</button>
-        </div>
-        <div class="prefs-tags" id="pantry-tags" style="margin-top:8px">
-          ${Store.getPantry().map(item => `<span class="pref-tag pref-liked">${item} <button class="pantry-remove" data-item="${item}">&times;</button></span>`).join('')}
-        </div>
-        ${Store.getPantry().length > 0 ? `<label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:var(--text-dim);cursor:pointer"><input type="checkbox" id="chk-pantry-only"> Only suggest meals I can make with these ingredients</label>` : ''}
-      </div>
-
-      <button class="btn btn-coach" id="btn-find-recipes" disabled>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
-        Pick a meal type first
-      </button>
-
-      <button class="btn btn-outline btn-full" id="btn-ai-suggest" style="margin-top:8px" disabled>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-        Ask AI Coach for personalized suggestions
-      </button>
 
       <button class="btn btn-outline btn-full" id="btn-meal-plan" style="margin-top:8px">
         Generate Weekly Meal Plan
@@ -167,6 +238,9 @@ const Coach = {
         </div>
       ` : ''}
     `;
+
+    // Auto-select detected meal type
+    this.selectedMealTypes = [autoMealType];
 
     // Auto-apply dietary style filters from profile
     this._autoApplyDietFilters(profile);
@@ -201,27 +275,7 @@ const Coach = {
       const pill = e.target.closest('.meal-type-pill');
       if (!pill) return;
       pill.classList.toggle('active');
-
       this.selectedMealTypes = Array.from(UI.$$('#meal-type-pills .meal-type-pill.active')).map(p => p.dataset.type);
-
-      const btnRecipes = UI.$('#btn-find-recipes');
-      const btnAI = UI.$('#btn-ai-suggest');
-      if (this.selectedMealTypes.length === 0) {
-        btnRecipes.disabled = true;
-        btnAI.disabled = true;
-        btnRecipes.innerHTML = `
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
-          Pick a meal type first
-        `;
-      } else {
-        btnRecipes.disabled = false;
-        btnAI.disabled = false;
-        const selected = this.selectedMealTypes.map(t => labels[t]).join(' + ');
-        btnRecipes.innerHTML = `
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
-          Find ${selected} Recipes
-        `;
-      }
     });
   },
 
@@ -524,19 +578,22 @@ const Coach = {
         }
         const recipe = RecipeDB.getRecipeById(id);
         if (!recipe) return;
-        container.innerHTML = this._renderRecipe({
+        const recipeData = {
           name: recipe.name,
           prep_time: recipe.prep_time_min + ' min',
           cook_time: recipe.cook_time_min + ' min',
           servings: String(recipe.servings),
           ingredients: recipe.ingredients.map(i => `${i.amount} ${i.item}`),
+          ingredients_raw: recipe.ingredients,
           steps: recipe.steps,
           tips: recipe.tips,
           calories: recipe.calories,
           protein: recipe.protein_g,
           carbs: recipe.carbs_g,
           fat: recipe.fat_g
-        });
+        };
+        container.innerHTML = this._renderRecipe(recipeData);
+        this._bindRecipeBoxEvents(container, recipeData);
         container.classList.add('show');
         btn.textContent = 'Hide Recipe';
       });
@@ -709,6 +766,7 @@ const Coach = {
         try {
           const recipe = await LLM.generateRecipe(suggestion, this.selectedDietFilters);
           container.innerHTML = this._renderRecipe(recipe);
+          this._bindRecipeBoxEvents(container, recipe);
           container.classList.add('show');
           btn.textContent = 'Hide Recipe';
         } catch (err) {
@@ -960,19 +1018,30 @@ const Coach = {
   },
 
   _renderRecipe(recipe) {
+    const baseServings = parseInt(recipe.servings) || 1;
+    const reqServings = recipe.requested_servings || baseServings;
+    const ingsRaw = recipe.ingredients_raw || [];
+    const hasRawIngs = ingsRaw.length > 0 && typeof ingsRaw[0] === 'object';
+    const uid = Date.now();
+
     return `
-      <div class="recipe-box">
+      <div class="recipe-box" data-uid="${uid}">
         <div class="recipe-header">
           <div class="recipe-title">${UI.esc(recipe.name)}</div>
           <div class="recipe-meta">
             ${recipe.prep_time ? `<span>Prep: ${UI.esc(recipe.prep_time)}</span>` : ''}
             ${recipe.cook_time ? `<span>Cook: ${UI.esc(recipe.cook_time)}</span>` : ''}
-            ${recipe.servings ? `<span>Serves: ${UI.esc(recipe.servings)}</span>` : ''}
           </div>
+        </div>
+        <div class="recipe-servings-row">
+          <label class="recipe-servings-label">Servings:</label>
+          <button class="servings-btn servings-minus" data-uid="${uid}">-</button>
+          <span class="servings-count" id="srv-${uid}">${reqServings}</span>
+          <button class="servings-btn servings-plus" data-uid="${uid}">+</button>
         </div>
         <div class="recipe-section">
           <div class="recipe-section-title">Ingredients</div>
-          <ul class="recipe-list">
+          <ul class="recipe-list" id="ings-${uid}">
             ${recipe.ingredients.map(ing => `<li>${UI.esc(ing)}</li>`).join('')}
           </ul>
         </div>
@@ -988,13 +1057,130 @@ const Coach = {
             <div class="recipe-tips">${UI.esc(recipe.tips)}</div>
           </div>
         ` : ''}
-        <div class="recipe-macros-summary">
+        <div class="recipe-macros-summary" id="macros-${uid}">
           <span style="color:var(--cal-color)">${recipe.calories} cal</span>
           <span style="color:var(--protein-color)">${recipe.protein}g P</span>
           <span style="color:var(--carb-color)">${recipe.carbs}g C</span>
           <span style="color:var(--fat-color)">${recipe.fat}g F</span>
+          <span class="macro-per-note">per serving</span>
         </div>
+        <div class="recipe-actions-row">
+          <button class="btn btn-outline btn-shopping-list" data-uid="${uid}">Shopping List</button>
+          <button class="btn btn-outline btn-copy-recipe" data-uid="${uid}">Copy Recipe</button>
+        </div>
+        <div class="shopping-list-container" id="shop-${uid}" style="display:none"></div>
       </div>
     `;
+  },
+
+  _bindRecipeBoxEvents(container, recipe) {
+    const uid = container.querySelector('.recipe-box')?.dataset.uid;
+    if (!uid) return;
+
+    const baseServings = parseInt(recipe.servings) || 1;
+    let currentServings = recipe.requested_servings || baseServings;
+    const ingsRaw = recipe.ingredients_raw || [];
+    const hasRawIngs = ingsRaw.length > 0 && typeof ingsRaw[0] === 'object';
+
+    const updateServings = (newVal) => {
+      currentServings = Math.max(1, Math.min(12, newVal));
+      const srvEl = UI.$(`#srv-${uid}`);
+      if (srvEl) srvEl.textContent = currentServings;
+
+      // Scale ingredients
+      if (hasRawIngs) {
+        const scale = currentServings / baseServings;
+        const ingsEl = UI.$(`#ings-${uid}`);
+        if (ingsEl) {
+          ingsEl.innerHTML = ingsRaw.map(ing => {
+            const grams = ing.grams ? Math.round(ing.grams * scale) : null;
+            const amt = ing.amount || '';
+            const scaledAmt = grams ? `${grams}g` : this._scaleAmount(amt, scale);
+            return `<li>${UI.esc(scaledAmt)} ${UI.esc(ing.item || '')}</li>`;
+          }).join('');
+        }
+      }
+
+      // Scale macros per serving stays same, total changes shown
+      const macrosEl = UI.$(`#macros-${uid}`);
+      if (macrosEl) {
+        macrosEl.innerHTML = `
+          <span style="color:var(--cal-color)">${recipe.calories} cal</span>
+          <span style="color:var(--protein-color)">${recipe.protein}g P</span>
+          <span style="color:var(--carb-color)">${recipe.carbs}g C</span>
+          <span style="color:var(--fat-color)">${recipe.fat}g F</span>
+          <span class="macro-per-note">per serving (${currentServings} servings = ${recipe.calories * currentServings} cal total)</span>
+        `;
+      }
+    };
+
+    container.querySelector('.servings-minus')?.addEventListener('click', () => updateServings(currentServings - 1));
+    container.querySelector('.servings-plus')?.addEventListener('click', () => updateServings(currentServings + 1));
+
+    // Shopping list
+    container.querySelector('.btn-shopping-list')?.addEventListener('click', () => {
+      const shopEl = UI.$(`#shop-${uid}`);
+      if (shopEl.style.display !== 'none') { shopEl.style.display = 'none'; return; }
+
+      const scale = currentServings / baseServings;
+      const categories = {};
+      const items = hasRawIngs ? ingsRaw : recipe.ingredients.map(i => ({ item: i, amount: '', category: 'other' }));
+      items.forEach(ing => {
+        const cat = (ing.category || 'other').toLowerCase();
+        if (!categories[cat]) categories[cat] = [];
+        const grams = ing.grams ? Math.round(ing.grams * scale) : null;
+        const amt = grams ? `${grams}g` : (ing.amount ? this._scaleAmount(ing.amount, scale) : '');
+        categories[cat].push({ item: ing.item || ing, amount: amt });
+      });
+
+      const catLabels = { protein: 'Protein', produce: 'Produce', dairy: 'Dairy', grain: 'Grains & Pasta', spice: 'Spices & Seasonings', oil: 'Oils & Sauces', other: 'Other' };
+      shopEl.innerHTML = `
+        <div class="shopping-list">
+          <div class="shopping-list-header">
+            <span class="recipe-section-title">Shopping List (${currentServings} servings)</span>
+            <button class="btn btn-outline btn-copy-shop" style="font-size:11px;padding:4px 10px">Copy</button>
+          </div>
+          ${Object.entries(categories).map(([cat, items]) => `
+            <div class="shop-category">
+              <div class="shop-cat-title">${catLabels[cat] || cat}</div>
+              ${items.map(i => `
+                <label class="shop-item">
+                  <input type="checkbox" class="shop-check">
+                  <span>${UI.esc(i.amount)} ${UI.esc(typeof i.item === 'string' ? i.item : '')}</span>
+                </label>
+              `).join('')}
+            </div>
+          `).join('')}
+        </div>
+      `;
+      shopEl.style.display = 'block';
+
+      shopEl.querySelector('.btn-copy-shop')?.addEventListener('click', () => {
+        const text = Object.entries(categories).map(([cat, items]) =>
+          `${(catLabels[cat] || cat).toUpperCase()}\n${items.map(i => `  - ${i.amount} ${typeof i.item === 'string' ? i.item : ''}`).join('\n')}`
+        ).join('\n\n');
+        navigator.clipboard.writeText(text).then(() => UI.toast('Shopping list copied!', 'success'));
+      });
+    });
+
+    // Copy recipe
+    container.querySelector('.btn-copy-recipe')?.addEventListener('click', () => {
+      const text = `${recipe.name}\n\nIngredients:\n${recipe.ingredients.map(i => `- ${i}`).join('\n')}\n\nInstructions:\n${recipe.steps.map((s, i) => `${i+1}. ${s}`).join('\n')}\n\nMacros per serving: ${recipe.calories} cal, ${recipe.protein}g protein, ${recipe.carbs}g carbs, ${recipe.fat}g fat`;
+      navigator.clipboard.writeText(text).then(() => UI.toast('Recipe copied!', 'success'));
+    });
+  },
+
+  _scaleAmount(amount, scale) {
+    if (!amount) return '';
+    const match = amount.match(/^([\d.\/]+)\s*(.*)/);
+    if (!match) return amount;
+    let num = parseFloat(match[1]);
+    if (match[1].includes('/')) {
+      const [n, d] = match[1].split('/');
+      num = parseFloat(n) / parseFloat(d);
+    }
+    if (isNaN(num)) return amount;
+    const scaled = Math.round(num * scale * 10) / 10;
+    return `${scaled}${match[2] ? ' ' + match[2] : ''}`;
   }
 };

@@ -409,7 +409,13 @@ def get_active_api_key(provider='anthropic'):
         result = dict(row)
         # Decrypt API key if encrypted
         from backend.encryption import decrypt_api_key
-        result['api_key'] = decrypt_api_key(result['api_key'])
+        decrypted = decrypt_api_key(result['api_key'])
+        # Validate decrypted key looks reasonable (not corrupted by SECRET_KEY change)
+        if provider == 'anthropic' and not decrypted.startswith('sk-ant-'):
+            import logging
+            logging.warning("DB API key decryption produced invalid key (SECRET_KEY may have changed). Skipping DB key.")
+            return None
+        result['api_key'] = decrypted
         return result
 
 

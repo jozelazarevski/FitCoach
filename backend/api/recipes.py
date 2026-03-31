@@ -296,6 +296,8 @@ def generate_recipe_llm():
     cuisine = data.get('cuisine', '')
     category = data.get('category', '')
     diet_filters = data.get('diet_filters', [])
+    servings = int(data.get('servings', 1))
+    servings = max(1, min(servings, 12))  # clamp 1-12
 
     # Check DB first — maybe this exact recipe was already generated
     with use_db() as db:
@@ -306,7 +308,6 @@ def generate_recipe_llm():
     if existing:
         full = get_recipe(existing['id'])
         if full and full.get('ingredients') and full.get('steps'):
-            # Serve from cache — free!
             ings = full['ingredients']
             _log_cost('generate', 'db_cache', 1)
             return jsonify({
@@ -314,10 +315,12 @@ def generate_recipe_llm():
                 'prep_time': f"{full.get('prep_time_min', 0)} min",
                 'cook_time': f"{full.get('cook_time_min', 0)} min",
                 'servings': str(full.get('servings', 1)),
+                'requested_servings': servings,
                 'ingredients': [
                     f"{i['amount']} {i['item']}" if isinstance(i, dict) else str(i)
                     for i in (ings if isinstance(ings, list) else [])
                 ],
+                'ingredients_raw': ings if isinstance(ings, list) else [],
                 'steps': full.get('steps', []),
                 'tips': full.get('tips', ''),
                 'calories': full['calories'],
@@ -331,7 +334,8 @@ def generate_recipe_llm():
 
     prompt = f"""Generate a complete recipe for: "{name}"
 
-Target macros per serving: {calories} cal, {protein}g protein, {carbs}g carbs, {fat}g fat
+Target macros PER SERVING: {calories} cal, {protein}g protein, {carbs}g carbs, {fat}g fat
+Number of servings: {servings}
 {f"Cuisine: {cuisine}" if cuisine else ""}
 {f"Category: {category}" if category else ""}
 Diet restrictions: {diet_str}
@@ -342,9 +346,9 @@ Return ONLY a valid JSON object:
   "description": "One sentence describing the dish",
   "prep_time": "X min",
   "cook_time": "X min",
-  "servings": "X",
+  "servings": {servings},
   "ingredients": [
-    {{"item": "ingredient name", "amount": "200g", "grams": 200}},
+    {{"item": "ingredient name", "amount": "200g", "grams": 200, "category": "protein|produce|dairy|grain|spice|oil|other"}},
     ...
   ],
   "steps": ["Step 1...", "Step 2...", ...],
@@ -358,7 +362,9 @@ Return ONLY a valid JSON object:
 }}
 
 Rules:
+- Ingredient amounts are for the TOTAL recipe ({servings} servings), macros are PER SERVING
 - Include exact gram measurements for all ingredients
+- Each ingredient must have a "category" field for shopping list grouping
 - 6-12 ingredients, 4-8 clear steps
 - Make it practical, delicious, and achievable for a home cook
 - The tip should relate to fitness/nutrition timing/benefits
@@ -377,7 +383,10 @@ Rules:
             if db_id:
                 result['id'] = db_id
 
-            # Normalize ingredients for frontend
+            # Keep raw ingredients for shopping list
+            result['ingredients_raw'] = result.get('ingredients', [])
+            result['requested_servings'] = servings
+            # Normalize ingredients for display
             result['ingredients'] = [
                 f"{ing.get('amount', '')} {ing.get('item', ing)}".strip()
                 if isinstance(ing, dict) else str(ing)
@@ -1067,8 +1076,12 @@ How should they fill the remaining macro gaps most efficiently?"""
 
     try:
         result = call_llm_json(prompt, max_tokens=2000)
+        # Handle LLM returning a plain list of options
+        if isinstance(result, list):
+            result = {'assessment': 'Here are your best options to fill the gap:', 'options': result}
         if isinstance(result, dict) and 'options' in result:
             return jsonify(result)
+        logging.warning("Gap advice unexpected format: %s", str(result)[:300])
         return jsonify({'error': 'Invalid response format'}), 500
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 503
