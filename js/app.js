@@ -300,6 +300,8 @@ const App = {
     const weekAvg = Store.getWeekAverage();
 
     screen.innerHTML = `
+      ${typeof Insights !== 'undefined' ? Insights.render() : ''}
+
       ${weekAvg ? `
         <div class="weekly-avg">
           <div class="weekly-avg-title">7-Day Average (${weekAvg.days} days)</div>
@@ -343,6 +345,8 @@ const App = {
         }).join('')}
       </div>
     `;
+
+    if (typeof Insights !== 'undefined') Insights.bind();
 
     UI.$('#hist-prev')?.addEventListener('click', () => {
       this.historyMonth.setMonth(this.historyMonth.getMonth() - 1);
