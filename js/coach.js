@@ -20,8 +20,19 @@ const Coach = {
     };
     const prefs = Store.getPreferences();
 
+    // Build coaching context summary
+    const condCount = (profile.healthConditions || []).length;
+    const dislikedCount = (prefs.disliked || []).length;
+    const goalLabel = Profile.goalLabels?.[profile.goal] || profile.goal;
+    const contextParts = [goalLabel];
+    if (condCount > 0) contextParts.push(`${condCount} health condition${condCount > 1 ? 's' : ''}`);
+    contextParts.push(`${remaining.calories} cal remaining`);
+    if (dislikedCount > 0) contextParts.push(`avoiding ${dislikedCount} food${dislikedCount > 1 ? 's' : ''}`);
+    const contextSummary = contextParts.join(' · ');
+
     const screen = UI.$('#screen-coach');
     screen.innerHTML = `
+      <div class="coach-context-summary">Coaching for ${profile.name || 'you'}: ${contextSummary}</div>
       <div class="card">
         <div class="card-title">Remaining Today</div>
         <div class="macro-grid">
@@ -157,6 +168,9 @@ const Coach = {
       ` : ''}
     `;
 
+    // Auto-apply dietary style filters from profile
+    this._autoApplyDietFilters(profile);
+
     this._bindMealTypePills();
     this._bindDietFilters();
     this._bindCuisineFilters();
@@ -209,6 +223,42 @@ const Coach = {
         `;
       }
     });
+  },
+
+  // Map health conditions to auto-selected diet filters
+  _healthToDietMap: {
+    celiac: 'gluten_free',
+    lactose_intolerant: 'dairy_free'
+  },
+
+  _autoApplyDietFilters(profile) {
+    const savedDiets = profile.dietaryPreferences?.dietaryStyle || [];
+    const healthConditions = profile.healthConditions || [];
+
+    // Auto-select from health conditions
+    const healthDiets = healthConditions
+      .map(c => this._healthToDietMap[c])
+      .filter(Boolean);
+
+    const allAutoFilters = [...new Set([...savedDiets, ...healthDiets])];
+
+    allAutoFilters.forEach(diet => {
+      const pill = UI.$(`.diet-pill[data-filter="${diet}"]`);
+      if (pill) pill.classList.add('active');
+    });
+
+    this.selectedDietFilters = [...allAutoFilters];
+
+    // Show note if health-based filters were applied
+    if (healthDiets.length > 0) {
+      const container = UI.$('#diet-filter-pills');
+      if (container) {
+        const note = document.createElement('div');
+        note.className = 'coach-auto-note';
+        note.textContent = 'Auto-selected based on your health profile';
+        container.parentNode.insertBefore(note, container.nextSibling);
+      }
+    }
   },
 
   _bindDietFilters() {
@@ -761,27 +811,6 @@ const Coach = {
                 <span style="color:var(--protein-color)">${m.protein}gP</span>
                 <span style="color:var(--carb-color)">${m.carbs}gC</span>
                 <span style="color:var(--fat-color)">${m.fat}gF</span>
-      const response = await LLM.call(messages, profile, 4000);
-      const cleaned = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const result = JSON.parse(cleaned);
-
-      const container = UI.$('#coach-results');
-      container.innerHTML = `
-        <div class="card-title" style="margin-bottom:12px">Your Weekly Meal Plan</div>
-        ${result.plan.map(day => `
-          <div class="card meal-plan-day">
-            <div class="meal-plan-day-title">${UI.esc(day.day)}</div>
-            ${day.meals.map(m => `
-              <div class="meal-plan-item">
-                <div class="meal-plan-type">${UI.esc(m.type)}</div>
-                <div class="meal-plan-name">${UI.esc(m.name)}</div>
-                <div class="meal-plan-desc">${UI.esc(m.description)}</div>
-                <div class="suggestion-macros" style="margin-top:4px">
-                  <span style="color:var(--cal-color)">${m.calories}cal</span>
-                  <span style="color:var(--protein-color)">${m.protein}gP</span>
-                  <span style="color:var(--carb-color)">${m.carbs}gC</span>
-                  <span style="color:var(--fat-color)">${m.fat}gF</span>
-                </div>
               </div>
             </div>
           `).join('')}

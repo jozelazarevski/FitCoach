@@ -486,6 +486,116 @@ const Tracker = {
 
     UI.toast('Meal logged!', 'success');
     App.refreshDashboard();
+
+    // Show "How do you feel?" prompt after a short delay
+    const todayMeals = Store.getTodayMeals();
+    const mealIndex = todayMeals.length - 1;
+    setTimeout(() => this.showFeelingPrompt(Store.getTodayKey(), mealIndex, meal.description), 500);
+  },
+
+  // === POST-MEAL FEELING TRACKER ===
+  feelingEmojis: {
+    energy: { high: ['&#9889;', 'Energized'], normal: ['&#128578;', 'Normal'], low: ['&#128564;', 'Tired'] },
+    digestion: { good: ['&#128077;', 'Good'], normal: ['&#128528;', 'Okay'], bad: ['&#128556;', 'Upset'] },
+    mood: { good: ['&#128522;', 'Great'], normal: ['&#128528;', 'Neutral'], bad: ['&#128542;', 'Low'] }
+  },
+
+  showFeelingPrompt(dateKey, mealIndex, mealDesc) {
+    // Don't show if already rated
+    if (Store.getMealFeeling(dateKey, mealIndex)) return;
+
+    const container = UI.$('#parse-result');
+    if (!container) return;
+
+    const shortDesc = (mealDesc || 'this meal').substring(0, 40) + (mealDesc?.length > 40 ? '...' : '');
+
+    container.innerHTML = `
+      <div class="card feeling-prompt">
+        <div class="feeling-prompt-header">
+          <div class="card-title">How do you feel?</div>
+          <div class="feeling-prompt-desc">After eating ${UI.esc(shortDesc)}</div>
+        </div>
+
+        <div class="feeling-category">
+          <div class="feeling-label">Energy</div>
+          <div class="feeling-options" id="feeling-energy">
+            <button class="feeling-btn" data-val="high"><span class="feeling-emoji">&#9889;</span><span class="feeling-text">Energized</span></button>
+            <button class="feeling-btn" data-val="normal"><span class="feeling-emoji">&#128578;</span><span class="feeling-text">Normal</span></button>
+            <button class="feeling-btn" data-val="low"><span class="feeling-emoji">&#128564;</span><span class="feeling-text">Tired</span></button>
+          </div>
+        </div>
+
+        <div class="feeling-category">
+          <div class="feeling-label">Digestion</div>
+          <div class="feeling-options" id="feeling-digestion">
+            <button class="feeling-btn" data-val="good"><span class="feeling-emoji">&#128077;</span><span class="feeling-text">Good</span></button>
+            <button class="feeling-btn" data-val="normal"><span class="feeling-emoji">&#128528;</span><span class="feeling-text">Okay</span></button>
+            <button class="feeling-btn" data-val="bad"><span class="feeling-emoji">&#128556;</span><span class="feeling-text">Upset</span></button>
+          </div>
+        </div>
+
+        <div class="feeling-category">
+          <div class="feeling-label">Mood</div>
+          <div class="feeling-options" id="feeling-mood">
+            <button class="feeling-btn" data-val="good"><span class="feeling-emoji">&#128522;</span><span class="feeling-text">Great</span></button>
+            <button class="feeling-btn" data-val="normal"><span class="feeling-emoji">&#128528;</span><span class="feeling-text">Neutral</span></button>
+            <button class="feeling-btn" data-val="bad"><span class="feeling-emoji">&#128542;</span><span class="feeling-text">Low</span></button>
+          </div>
+        </div>
+
+        <div class="feeling-category">
+          <label class="feeling-check-label">
+            <input type="checkbox" id="feeling-bloating">
+            <span>Feeling bloated</span>
+          </label>
+        </div>
+
+        <div class="feeling-category">
+          <input type="text" class="food-input" id="feeling-note" placeholder="Any notes? (optional)" style="font-size:13px">
+        </div>
+
+        <div class="parse-actions">
+          <button class="btn btn-outline" id="btn-skip-feeling">Skip</button>
+          <button class="btn" id="btn-save-feeling">Save</button>
+        </div>
+      </div>
+    `;
+    UI.show(container);
+
+    // Bind selection toggles
+    ['feeling-energy', 'feeling-digestion', 'feeling-mood'].forEach(id => {
+      UI.$('#' + id)?.addEventListener('click', e => {
+        const btn = e.target.closest('.feeling-btn');
+        if (!btn) return;
+        UI.$$('#' + id + ' .feeling-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    UI.$('#btn-skip-feeling')?.addEventListener('click', () => {
+      UI.hide(container);
+    });
+
+    UI.$('#btn-save-feeling')?.addEventListener('click', () => {
+      const energy = UI.$('#feeling-energy .feeling-btn.active')?.dataset.val || null;
+      const digestion = UI.$('#feeling-digestion .feeling-btn.active')?.dataset.val || null;
+      const mood = UI.$('#feeling-mood .feeling-btn.active')?.dataset.val || null;
+      const bloating = UI.$('#feeling-bloating')?.checked || false;
+      const note = UI.$('#feeling-note')?.value.trim() || '';
+
+      if (!energy && !digestion && !mood && !bloating) {
+        UI.toast('Select at least one feeling', 'error');
+        return;
+      }
+
+      Store.addMealFeeling(dateKey, mealIndex, {
+        energy, digestion, mood, bloating, note
+      });
+
+      UI.hide(container);
+      UI.toast('Feeling logged! This helps personalize your coaching.', 'success');
+      App.refreshDashboard();
+    });
   },
 
   renderMealsList(meals) {
@@ -496,21 +606,46 @@ const Tracker = {
       </div>`;
     }
 
-    return meals.map((meal, i) => `
-      <div class="meal-card">
-        <div class="meal-card-header">
-          <span class="meal-time">${UI.formatTime(meal.time)}</span>
-          <button class="meal-delete" data-index="${i}" title="Delete">&times;</button>
+    const todayKey = Store.getTodayKey();
+    const dayFeelings = Store.getDayFeelings(todayKey);
+    const emojiMap = {
+      energy: { high: '&#9889;', normal: '&#128578;', low: '&#128564;' },
+      digestion: { good: '&#128077;', normal: '&#128528;', bad: '&#128556;' },
+      mood: { good: '&#128522;', normal: '&#128528;', bad: '&#128542;' }
+    };
+
+    return meals.map((meal, i) => {
+      const feeling = dayFeelings[i];
+      let feelingHTML = '';
+
+      if (feeling) {
+        const badges = [];
+        if (feeling.energy) badges.push(`<span class="feeling-badge feeling-${feeling.energy === 'low' || feeling.energy === 'bad' ? 'neg' : feeling.energy === 'normal' ? 'neutral' : 'pos'}">${emojiMap.energy[feeling.energy]} ${feeling.energy}</span>`);
+        if (feeling.digestion) badges.push(`<span class="feeling-badge feeling-${feeling.digestion === 'bad' ? 'neg' : feeling.digestion === 'normal' ? 'neutral' : 'pos'}">${emojiMap.digestion[feeling.digestion]} ${feeling.digestion}</span>`);
+        if (feeling.mood) badges.push(`<span class="feeling-badge feeling-${feeling.mood === 'bad' ? 'neg' : feeling.mood === 'normal' ? 'neutral' : 'pos'}">${emojiMap.mood[feeling.mood]} ${feeling.mood}</span>`);
+        if (feeling.bloating) badges.push('<span class="feeling-badge feeling-neg">bloated</span>');
+        feelingHTML = `<div class="meal-feelings">${badges.join('')}</div>`;
+      } else {
+        feelingHTML = `<button class="feeling-add-btn" data-date="${todayKey}" data-index="${i}" data-desc="${UI.esc(meal.description || '')}">+ How did you feel?</button>`;
+      }
+
+      return `
+        <div class="meal-card">
+          <div class="meal-card-header">
+            <span class="meal-time">${UI.formatTime(meal.time)}</span>
+            <button class="meal-delete" data-index="${i}" title="Delete">&times;</button>
+          </div>
+          <div class="meal-name">${UI.esc(meal.description || meal.items?.map(it => it.name).join(', '))}</div>
+          <div class="meal-macros">
+            <span>${UI.macroDot('cal')} ${meal.total.calories} cal</span>
+            <span>${UI.macroDot('protein')} ${meal.total.protein}g P</span>
+            <span>${UI.macroDot('carb')} ${meal.total.carbs}g C</span>
+            <span>${UI.macroDot('fat')} ${meal.total.fat}g F</span>
+          </div>
+          ${feelingHTML}
         </div>
-        <div class="meal-name">${UI.esc(meal.description || meal.items?.map(it => it.name).join(', '))}</div>
-        <div class="meal-macros">
-          <span>${UI.macroDot('cal')} ${meal.total.calories} cal</span>
-          <span>${UI.macroDot('protein')} ${meal.total.protein}g P</span>
-          <span>${UI.macroDot('carb')} ${meal.total.carbs}g C</span>
-          <span>${UI.macroDot('fat')} ${meal.total.fat}g F</span>
-        </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
   },
 
   bindDeleteButtons() {
@@ -520,6 +655,17 @@ const Tracker = {
         Store.deleteMeal(index);
         UI.toast('Meal deleted', '');
         App.refreshDashboard();
+      });
+    });
+
+
+    // Bind "How did you feel?" buttons on past meals
+    UI.$$('.feeling-add-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const dateKey = btn.dataset.date;
+        const mealIndex = parseInt(btn.dataset.index);
+        const desc = btn.dataset.desc;
+        this.showFeelingPrompt(dateKey, mealIndex, desc);
       });
     });
   },

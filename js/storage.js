@@ -20,7 +20,12 @@ const Store = {
         apiKey: '',
         claudeModel: 'claude-haiku-4-5-20251001',
         unit: 'metric',
-        healthConditions: []
+        healthConditions: [],
+        dietaryPreferences: {
+          dietaryStyle: [],
+          liked: [],
+          disliked: []
+        }
       },
       logs: {},
       preferences: {
@@ -42,7 +47,18 @@ const Store = {
       // Return cached version if localStorage hasn't changed
       if (this._cache && raw === this._cacheRaw) return this._cache;
       const data = JSON.parse(raw);
-      this._cache = { ...this._defaults(), ...data, profile: { ...this._defaults().profile, ...data.profile } };
+      const defaults = this._defaults();
+      this._cache = {
+        ...defaults, ...data,
+        profile: {
+          ...defaults.profile,
+          ...data.profile,
+          dietaryPreferences: {
+            ...defaults.profile.dietaryPreferences,
+            ...(data.profile?.dietaryPreferences || {})
+          }
+        }
+      };
       this._cacheRaw = raw;
       return this._cache;
     } catch {
@@ -343,5 +359,96 @@ const Store = {
   getMealPlan(weekKey) {
     const data = this.load();
     return (data.mealPlans || {})[weekKey] || null;
+  },
+
+  // === MEAL FEELINGS ===
+  addMealFeeling(dateKey, mealIndex, feeling) {
+    const data = this.load();
+    if (!data.mealFeelings) data.mealFeelings = {};
+    if (!data.mealFeelings[dateKey]) data.mealFeelings[dateKey] = {};
+    data.mealFeelings[dateKey][mealIndex] = {
+      ...feeling,
+      timestamp: new Date().toISOString()
+    };
+    this.save(data);
+  },
+
+  getMealFeeling(dateKey, mealIndex) {
+    const data = this.load();
+    return data.mealFeelings?.[dateKey]?.[mealIndex] || null;
+  },
+
+  getDayFeelings(dateKey) {
+    const data = this.load();
+    return data.mealFeelings?.[dateKey] || {};
+  },
+
+  getRecentFeelingPatterns() {
+    const data = this.load();
+    const feelings = data.mealFeelings || {};
+    const patterns = [];
+    const today = new Date();
+
+    // Collect last 14 days of feelings paired with meal data
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      const dayFeelings = feelings[key] || {};
+      const dayMeals = data.logs[key]?.meals || [];
+
+      Object.entries(dayFeelings).forEach(([idx, feeling]) => {
+        const meal = dayMeals[parseInt(idx)];
+        if (meal && feeling) {
+          const foods = meal.items?.map(it => it.name.toLowerCase()) || [];
+          patterns.push({
+            foods,
+            energy: feeling.energy,
+            digestion: feeling.digestion,
+            mood: feeling.mood,
+            bloating: feeling.bloating || false,
+            description: meal.description || ''
+          });
+        }
+      });
+    }
+    return patterns;
+  },
+
+  getFeelingInsights() {
+    const patterns = this.getRecentFeelingPatterns();
+    if (patterns.length < 3) return null;
+
+    // Find foods that correlate with negative feelings
+    const foodScores = {};
+    patterns.forEach(p => {
+      const score = (p.energy === 'high' ? 1 : p.energy === 'low' ? -1 : 0) +
+                    (p.digestion === 'good' ? 1 : p.digestion === 'bad' ? -1 : 0) +
+                    (p.mood === 'good' ? 1 : p.mood === 'bad' ? -1 : 0) +
+                    (p.bloating ? -1 : 0);
+      p.foods.forEach(food => {
+        if (!foodScores[food]) foodScores[food] = { total: 0, count: 0 };
+        foodScores[food].total += score;
+        foodScores[food].count++;
+      });
+    });
+
+    const problematic = [];
+    const beneficial = [];
+    Object.entries(foodScores).forEach(([food, data]) => {
+      if (data.count < 2) return;
+      const avg = data.total / data.count;
+      if (avg <= -0.5) problematic.push({ food, avgScore: avg, count: data.count });
+      if (avg >= 0.5) beneficial.push({ food, avgScore: avg, count: data.count });
+    });
+
+    problematic.sort((a, b) => a.avgScore - b.avgScore);
+    beneficial.sort((a, b) => b.avgScore - a.avgScore);
+
+    return {
+      totalEntries: patterns.length,
+      problematic: problematic.slice(0, 5),
+      beneficial: beneficial.slice(0, 5)
+    };
   }
 };

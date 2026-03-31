@@ -492,3 +492,228 @@ def generation_status():
     if status is None:
         return jsonify({'error': 'Batch not found'}), 404
     return jsonify(status)
+
+
+# ══════════════════════════════════════════════════════════
+# User management
+# ══════════════════════════════════════════════════════════
+
+@admin_bp.route('/users', methods=['GET'])
+def list_users():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        per_page = min(max(1, int(request.args.get('per_page', 25))), 200)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid pagination parameters'}), 400
+
+    search = request.args.get('search', '').strip()
+
+    with use_db() as db:
+        conditions = ["1=1"]
+        params = []
+
+        if search:
+            conditions.append("(u.email LIKE ? OR u.name LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+
+        where = " AND ".join(conditions)
+
+        count = db.execute(f"SELECT COUNT(*) FROM users u WHERE {where}", params).fetchone()[0]
+        offset = (page - 1) * per_page
+
+        rows = db.execute(f"""
+            SELECT u.id, u.email, u.name, u.profile_data, u.user_data,
+                   u.created_at, u.updated_at,
+                   (SELECT COUNT(*) FROM user_sessions s WHERE s.user_id = u.id) as session_count
+            FROM users u WHERE {where}
+            ORDER BY u.id DESC LIMIT ? OFFSET ?
+        """, params + [per_page, offset]).fetchall()
+
+    users = []
+    for r in rows:
+        profile = json.loads(r['profile_data'] or '{}')
+        user_data = json.loads(r['user_data'] or '{}')
+
+        # Count logged days and meals
+        logs = user_data.get('logs', {})
+        total_days = len(logs)
+        total_meals = sum(len(day.get('meals', [])) for day in logs.values())
+
+        # Body entries
+        body_entries = len(user_data.get('bodyLog', []))
+
+        # Workout days
+        workouts = user_data.get('workouts', {})
+        workout_days = len(workouts)
+
+        users.append({
+            'id': r['id'],
+            'email': r['email'],
+            'name': r['name'] or '',
+            'goal': profile.get('goal', ''),
+            'weight': profile.get('weight', 0),
+            'height': profile.get('height', 0),
+            'age': profile.get('age', 0),
+            'gender': profile.get('gender', ''),
+            'activity_level': profile.get('activityLevel', ''),
+            'health_conditions': profile.get('healthConditions', []),
+            'dietary_style': profile.get('dietaryPreferences', {}).get('dietaryStyle', []),
+            'target_calories': profile.get('macros', {}).get('calories', 0),
+            'target_protein': profile.get('macros', {}).get('protein', 0),
+            'total_days_logged': total_days,
+            'total_meals_logged': total_meals,
+            'body_entries': body_entries,
+            'workout_days': workout_days,
+            'session_count': r['session_count'],
+            'created_at': r['created_at'],
+            'updated_at': r['updated_at']
+        })
+
+    return jsonify({
+        'users': users,
+        'total': count,
+        'page': page,
+        'per_page': per_page,
+        'pages': (count + per_page - 1) // per_page
+    })
+
+
+@admin_bp.route('/users/stats', methods=['GET'])
+def user_stats():
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        total = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        active_sessions = db.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM user_sessions WHERE created_at > datetime('now', '-7 days')"
+        ).fetchone()[0]
+        new_today = db.execute(
+            "SELECT COUNT(*) FROM users WHERE date(created_at) = date('now')"
+        ).fetchone()[0]
+        new_week = db.execute(
+            "SELECT COUNT(*) FROM users WHERE created_at > datetime('now', '-7 days')"
+        ).fetchone()[0]
+        rows = db.execute("SELECT profile_data FROM users").fetchall()
+
+    # Aggregate goals and conditions
+    goal_counts = {}
+    condition_counts = {}
+    diet_counts = {}
+    with_profiles = 0
+
+    for r in rows:
+        profile = json.loads(r['profile_data'] or '{}')
+        if profile.get('weight') and profile.get('height'):
+            with_profiles += 1
+        goal = profile.get('goal', '')
+        if goal:
+            goal_counts[goal] = goal_counts.get(goal, 0) + 1
+        for cond in profile.get('healthConditions', []):
+            condition_counts[cond] = condition_counts.get(cond, 0) + 1
+        for diet in profile.get('dietaryPreferences', {}).get('dietaryStyle', []):
+            diet_counts[diet] = diet_counts.get(diet, 0) + 1
+
+    return jsonify({
+        'total_users': total,
+        'active_last_7d': active_sessions,
+        'new_today': new_today,
+        'new_this_week': new_week,
+        'with_profiles': with_profiles,
+        'by_goal': dict(sorted(goal_counts.items(), key=lambda x: -x[1])),
+        'by_condition': dict(sorted(condition_counts.items(), key=lambda x: -x[1])[:15]),
+        'by_diet': dict(sorted(diet_counts.items(), key=lambda x: -x[1]))
+    })
+
+
+@admin_bp.route('/users/<int:user_id>', methods=['GET'])
+def get_user_detail(user_id):
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        row = db.execute(
+            "SELECT id, email, name, profile_data, user_data, created_at, updated_at FROM users WHERE id = ?",
+            (user_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'User not found'}), 404
+
+        sessions = db.execute(
+            "SELECT token, created_at FROM user_sessions WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,)
+        ).fetchall()
+
+    profile = json.loads(row['profile_data'] or '{}')
+    user_data = json.loads(row['user_data'] or '{}')
+
+    logs = user_data.get('logs', {})
+    total_meals = sum(len(d.get('meals', [])) for d in logs.values())
+    recent_days = sorted(logs.keys(), reverse=True)[:7]
+
+    # Daily calorie averages for recent days
+    daily_summary = []
+    for day_key in recent_days:
+        day_meals = logs[day_key].get('meals', [])
+        day_cals = sum(m.get('total', {}).get('calories', 0) for m in day_meals)
+        day_protein = sum(m.get('total', {}).get('protein', 0) for m in day_meals)
+        daily_summary.append({
+            'date': day_key,
+            'meals': len(day_meals),
+            'calories': day_cals,
+            'protein': day_protein
+        })
+
+    prefs = user_data.get('preferences', {})
+
+    return jsonify({
+        'id': row['id'],
+        'email': row['email'],
+        'name': row['name'] or '',
+        'profile': profile,
+        'total_days_logged': len(logs),
+        'total_meals_logged': total_meals,
+        'body_entries': len(user_data.get('bodyLog', [])),
+        'workout_days': len(user_data.get('workouts', {})),
+        'daily_summary': daily_summary,
+        'preferences': {
+            'liked': prefs.get('liked', []),
+            'disliked': prefs.get('disliked', [])
+        },
+        'session_count': len(sessions),
+        'sessions': [{'created_at': s['created_at']} for s in sessions[:10]],
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at']
+    })
+
+
+@admin_bp.route('/users/<int:user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        row = db.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            return jsonify({'error': 'User not found'}), 404
+
+        db.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
+        db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        db.commit()
+
+    return jsonify({'message': 'User deleted'})
+
+
+@admin_bp.route('/users/<int:user_id>/sessions', methods=['DELETE'])
+def revoke_user_sessions(user_id):
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        db.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
+        db.commit()
+
+    return jsonify({'message': 'All sessions revoked'})
