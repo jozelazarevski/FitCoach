@@ -65,6 +65,8 @@ const App = {
     screen.innerHTML = `
       ${Tracker.renderFoodInput()}
 
+      ${typeof Streaks !== 'undefined' ? Streaks.renderCard() : ''}
+
       <div class="card">
         <div class="card-title">Today's Macros</div>
         <div class="macro-grid">
