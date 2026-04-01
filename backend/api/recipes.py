@@ -169,6 +169,288 @@ def _save_full_recipe_to_db(result, cuisine='', category='', diet_filters=None):
 #  LLM-powered endpoints (with DB caching)
 # ---------------------------------------------------------------------------
 
+@recipes_bp.route('/smart-suggest', methods=['POST'])
+def smart_suggest():
+    """Intelligent LLM-only suggestions that understand full daily context."""
+    import traceback
+    try:
+        return _smart_suggest_inner()
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error("Smart suggest error: %s\n%s", e, tb)
+        return jsonify({'error': str(e), 'detail': tb}), 500
+
+
+def _meal_rules(meal):
+    if meal == 'breakfast':
+        return '\n   - Breakfast: eggs, oats, yogurt, smoothies, toast, pancakes, fruit, granola. NO steak/lamb/heavy meats'
+    if meal == 'snack':
+        return '\n   - Snack: light options under 300 cal. Yogurt, fruit, nuts, protein bar, hummus, etc.'
+    if meal == 'lunch':
+        return '\n   - Lunch: salads, sandwiches, wraps, bowls, soups, grain bowls. Balanced and filling.'
+    if meal == 'dinner':
+        return '\n   - Dinner: proper main courses with protein, carbs, and vegetables.'
+    return ''
+
+
+def _smart_suggest_inner():
+    from backend.llm_client import call_llm_json
+
+    data = request.get_json() or {}
+    hour = data.get('hour', 12)
+    profile = data.get('profile', {})
+    today_meals = data.get('today_meals', [])
+    remaining = data.get('remaining', {})
+    week_meals = data.get('week_meals', [])
+    liked = data.get('liked', [])
+    disliked = data.get('disliked', [])
+    diet_filters = data.get('diet_filters', [])
+    health_conditions = data.get('health_conditions', [])
+
+    # Group logged entries into meal sittings by time proximity
+    # Entries within 30 min of each other = same meal sitting
+    sittings = []
+    for m in sorted(today_meals, key=lambda x: x.get('hour', 0)):
+        h = m.get('hour', 0)
+        cal = m.get('calories', 0)
+        if sittings and abs(h - sittings[-1]['hour']) < 1:
+            # Same sitting (within ~1 hour)
+            sittings[-1]['calories'] += cal
+            sittings[-1]['items'].append(m.get('name', ''))
+        else:
+            sittings.append({'hour': h, 'calories': cal, 'items': [m.get('name', '')]})
+
+    num_sittings = len(sittings)
+    total_cal_eaten = sum(s['calories'] for s in sittings)
+
+    # Label each sitting as a meal type based on time
+    meals_had = []
+    for s in sittings:
+        if s['hour'] < 11:
+            meals_had.append('breakfast')
+        elif s['hour'] < 15:
+            meals_had.append('lunch')
+        elif s['hour'] < 17:
+            meals_had.append('snack')
+        else:
+            meals_had.append('dinner')
+    meals_had = list(dict.fromkeys(meals_had))  # deduplicate preserving order
+
+    # Determine next meal based on time + what's been eaten
+    if hour < 10:
+        next_meal = 'breakfast' if 'breakfast' not in meals_had else 'snack'
+    elif hour < 12:
+        if 'breakfast' not in meals_had:
+            next_meal = 'breakfast'
+        elif 'lunch' not in meals_had and total_cal_eaten >= 300:
+            next_meal = 'lunch'
+        else:
+            next_meal = 'snack'
+    elif hour < 15:
+        next_meal = 'lunch' if 'lunch' not in meals_had else 'snack'
+    elif hour < 18:
+        if 'lunch' not in meals_had:
+            next_meal = 'lunch'
+        elif 'dinner' not in meals_had:
+            next_meal = 'snack'
+        else:
+            next_meal = 'snack'
+    elif hour < 21:
+        next_meal = 'dinner' if 'dinner' not in meals_had else 'snack'
+    else:
+        next_meal = 'snack'
+
+    today_meals_str = '\n'.join(
+        f"  - {m.get('name', 'Unknown')} ({m.get('calories', 0)} cal, {m.get('protein', 0)}g P)"
+        for m in today_meals
+    ) if today_meals else '  Nothing yet'
+
+    week_meals_str = ', '.join(week_meals[:15]) if week_meals else 'none logged'
+    # Extract protein types from this week
+    week_proteins = set()
+    _PROT_KW = {
+        'chicken': 'chicken', 'turkey': 'turkey', 'beef': 'beef', 'steak': 'beef',
+        'pork': 'pork', 'lamb': 'lamb', 'salmon': 'salmon', 'tuna': 'tuna',
+        'shrimp': 'shrimp', 'fish': 'fish', 'cod': 'fish', 'tofu': 'tofu',
+        'egg': 'eggs', 'lentil': 'lentils', 'bean': 'beans',
+    }
+    for wm in week_meals:
+        wm_lower = wm.lower()
+        for kw, prot in _PROT_KW.items():
+            if kw in wm_lower:
+                week_proteins.add(prot)
+
+    today_proteins = set()
+    for tm in today_meals:
+        tm_lower = (tm.get('name') or '').lower()
+        for kw, prot in _PROT_KW.items():
+            if kw in tm_lower:
+                today_proteins.add(prot)
+
+    diet_str = ', '.join(diet_filters) if diet_filters else 'no restrictions'
+    health_str = ', '.join(health_conditions) if health_conditions else 'none'
+
+    # New: workout context
+    workouts = data.get('workouts', [])
+    last_workout_hours = data.get('last_workout_hours_ago')
+    workout_str = ''
+    if workouts:
+        workout_str = '\n'.join(f"  - {w.get('type', 'Workout')} ({w.get('calories', 0)} cal burned)" for w in workouts)
+    else:
+        workout_str = '  No workout today'
+
+    workout_context = ''
+    if last_workout_hours is not None and last_workout_hours < 2:
+        workout_context = '\n** POST-WORKOUT WINDOW: Client worked out less than 2 hours ago. Prioritize fast-absorbing protein (whey, eggs, chicken) + simple carbs (rice, fruit, toast) for recovery. **'
+    elif last_workout_hours is not None and last_workout_hours < 4:
+        workout_context = '\n** Recent workout: Focus on protein-rich recovery meal with moderate carbs. **'
+    elif workouts:
+        workout_context = '\n** Client worked out today — ensure adequate protein and carb replenishment across remaining meals. **'
+
+    # New: macro pacing analysis
+    target_cal = profile.get('target_calories', 2000)
+    target_prot = profile.get('target_protein', 150)
+    day_progress = min(hour / 21, 1.0)  # 0-1 scale (5am=0, 9pm=1)
+    cal_pacing = total_cal_eaten / max(target_cal, 1)
+    prot_pacing = sum(m.get('protein', 0) for m in today_meals) / max(target_prot, 1)
+
+    pacing_alert = ''
+    if day_progress > 0.5 and prot_pacing < day_progress * 0.6:
+        pacing_alert = f'\n** PROTEIN ALERT: Only {int(prot_pacing*100)}% of protein target consumed but {int(day_progress*100)}% of day is gone. Urgently prioritize high-protein options. **'
+    elif day_progress > 0.7 and cal_pacing > 0.85:
+        pacing_alert = f'\n** CALORIE ALERT: Already at {int(cal_pacing*100)}% of calorie target with {int((1-day_progress)*100)}% of day remaining. Suggest very low-calorie, high-protein options. **'
+
+    # New: health condition-specific rules
+    _CONDITION_RULES = {
+        'diabetes_t2': 'DIABETES: Low glycemic index carbs only. Pair carbs with protein/fat. Distribute carbs evenly. Avoid sugary drinks, white bread, white rice.',
+        'prediabetes': 'PREDIABETES: Prefer low-GI carbs (sweet potato, quinoa, oats). Limit refined sugars. Include fiber with every meal.',
+        'insulin_resistance': 'INSULIN RESISTANCE: Lower carb ratio. Prefer complex carbs with fiber. Include healthy fats (avocado, nuts, olive oil).',
+        'high_cholesterol': 'HIGH CHOLESTEROL: Limit saturated fat <7% calories. Include omega-3 (salmon, walnuts, flax). Add soluble fiber (oats, beans). Avoid fried foods.',
+        'heart_disease': 'HEART DISEASE: Low sodium. Omega-3 rich fish 2x/week. High fiber. Avoid trans fats and excessive red meat.',
+        'high_blood_pressure': 'HIGH BP: Low sodium (<1500mg/day). High potassium (banana, sweet potato, spinach, avocado). DASH diet principles.',
+        'ibs': 'IBS: Avoid high-FODMAP foods (onion, garlic, wheat, dairy, beans, apples). Prefer low-FODMAP: rice, eggs, chicken, cucumber, carrots, oranges.',
+        'ibd_crohn': 'CROHN\'S: Avoid high-fiber raw vegetables. Prefer cooked, soft foods. Small frequent meals. Avoid spicy/fatty foods.',
+        'celiac': 'CELIAC: Absolutely zero gluten. Check all sauces and seasonings. Safe grains: rice, quinoa, buckwheat, corn.',
+        'pcos': 'PCOS: Lower carb ratio (30-35% of calories). Anti-inflammatory foods. Include inositol-rich foods (citrus, beans, nuts). Avoid refined sugar.',
+        'hypothyroid': 'HYPOTHYROID: Include selenium (brazil nuts, fish) and iodine (seaweed, fish). Avoid excessive raw cruciferous vegetables. Include zinc-rich foods.',
+        'anemia': 'ANEMIA: Iron-rich foods (red meat, spinach, lentils). Pair with vitamin C for absorption. Avoid tea/coffee with meals (blocks iron).',
+        'osteoporosis': 'OSTEOPOROSIS: High calcium (dairy, sardines, leafy greens). Vitamin D rich foods. Include magnesium and vitamin K.',
+        'gout': 'GOUT: Avoid organ meats, shellfish, red meat. Prefer low-purine proteins: eggs, dairy, chicken. Stay hydrated. Include cherries.',
+        'kidney_disease': 'KIDNEY: Moderate protein (not excessive). Low sodium, low potassium if advanced. Avoid processed meats.',
+        'anxiety_depression': 'MENTAL HEALTH: Include omega-3, magnesium (dark chocolate, spinach, almonds), B-vitamins, tryptophan (turkey, eggs, cheese). Avoid excess caffeine/sugar.',
+    }
+    health_rules = []
+    for cond in health_conditions:
+        rule = _CONDITION_RULES.get(cond)
+        if rule:
+            health_rules.append(rule)
+    health_rules_str = '\n'.join(health_rules) if health_rules else ''
+
+    # New: water intake context
+    water_ml = data.get('water_ml', 0)
+    water_note = ''
+    if water_ml < 500 and hour > 12:
+        water_note = '\nHYDRATION NOTE: Very low water intake today. Suggest hydrating foods (soups, fruits, cucumber) and remind to drink water.'
+
+    # New: weekly averages context
+    weekly_avg = data.get('weekly_avg', {})
+    weekly_note = ''
+    if weekly_avg.get('days', 0) >= 3:
+        avg_prot = weekly_avg.get('avgProtein', 0)
+        if avg_prot < target_prot * 0.8:
+            weekly_note = f'\nWEEKLY TREND: Protein has averaged only {avg_prot}g/day (target: {target_prot}g). Focus on high-protein options this week.'
+        avg_cal = weekly_avg.get('avgCal', 0)
+        if avg_cal > target_cal * 1.15:
+            weekly_note += f'\nWEEKLY TREND: Calories averaging {avg_cal}/day (target: {target_cal}). Suggest lower-calorie options.'
+
+    # New: feeling patterns
+    feeling_patterns = data.get('feeling_patterns', [])
+    feeling_str = ''
+    if feeling_patterns:
+        feeling_str = '\nMEAL FEEDBACK PATTERNS:\n' + '\n'.join(f'  - {p}' for p in feeling_patterns[:3])
+
+    prompt = f"""You are an elite fitness nutritionist and personal coach. You know this client deeply. Suggest exactly 5 realistic, delicious {next_meal} options that are PERFECTLY tailored to their situation RIGHT NOW.
+
+CLIENT PROFILE:
+- Goal: {profile.get('goal', 'maintenance')} | Activity: {profile.get('activity_level', 'moderate')}
+- {profile.get('gender', 'unknown')}, {profile.get('age', 30)} years old, {profile.get('weight', 0)}kg
+- Daily targets: {target_cal} cal / {target_prot}g P / {profile.get('target_carbs', 200)}g C / {profile.get('target_fat', 60)}g F
+- Diet restrictions: {diet_str}
+- Health conditions: {health_str}
+- Likes: {', '.join(liked[:5]) if liked else 'none specified'}
+- Dislikes: {', '.join(disliked[:5]) if disliked else 'none specified'}
+{health_rules_str}
+
+TODAY — {hour}:00 ({int(day_progress*100)}% of day):
+- Meals eaten:
+{today_meals_str}
+- Remaining: {remaining.get('calories', 2000)} cal, {remaining.get('protein', 50)}g P, {remaining.get('carbs', 100)}g C, {remaining.get('fat', 30)}g F
+- Macro pacing: {int(cal_pacing*100)}% cal consumed, {int(prot_pacing*100)}% protein consumed
+- Protein types today: {', '.join(today_proteins) if today_proteins else 'none yet'}
+- Workouts:
+{workout_str}{workout_context}{pacing_alert}{water_note}
+
+THIS WEEK:
+- Recent meals: {week_meals_str}
+- Protein types this week: {', '.join(week_proteins) if week_proteins else 'varied'}{weekly_note}{feeling_str}
+
+NEXT MEAL: {next_meal.upper()}{_meal_rules(next_meal)}
+
+COACHING RULES:
+1. This is {next_meal.upper()} — meals must be appropriate for this meal type
+2. DO NOT repeat protein types from today: {', '.join(today_proteins) if today_proteins else 'none yet'}
+3. Vary cuisines and proteins from this week — prioritize what they HAVEN'T had
+4. Each suggestion MUST fit remaining macro budget
+5. Macros must be realistic: protein*4 + carbs*4 + fat*9 within 15% of calories
+6. REAL, common foods — no exotic ingredients, no camel meat, no obscure dishes
+7. Consider prep time — {('weeknight, prefer quick <30min options' if hour >= 17 else 'morning, prefer quick <15min options' if hour < 10 else 'suggest a mix of quick and involved options')}
+8. If health conditions listed above, follow condition-specific rules STRICTLY
+9. Your "coaching_note" should be a personalized 1-2 sentence insight — reference their specific situation (macros, workout, health, patterns)
+10. "why" for each meal should explain WHY this specific meal RIGHT NOW for THIS person
+
+Return ONLY valid JSON:
+{{
+  "next_meal": "{next_meal}",
+  "coaching_note": "1-2 sentence personalized insight about their day so far and what they need now",
+  "suggestions": [
+    {{
+      "name": "Appetizing recipe name",
+      "description": "One sentence description",
+      "why": "Why this is right for them right now",
+      "calories": <int>,
+      "protein": <int>,
+      "carbs": <int>,
+      "fat": <int>,
+      "cuisine": "Italian/Mexican/Asian/etc",
+      "category": "poultry/red_meat/fish/seafood/vegan/vegetarian",
+      "prep_time_min": <int>,
+      "difficulty": "easy/medium/hard",
+      "rank": <1-5>
+    }}
+  ]
+}}"""
+
+    result = call_llm_json(prompt, max_tokens=3000)
+    if isinstance(result, dict) and 'suggestions' in result:
+        result['next_meal'] = next_meal
+        result['meals_had_today'] = list(meals_had)
+        for s in result['suggestions']:
+            s['source'] = 'llm'
+            s['meal_type'] = next_meal
+        _log_cost('smart_suggest', 'llm')
+        return jsonify(result)
+    # Handle list response
+    if isinstance(result, list):
+        return jsonify({
+            'next_meal': next_meal,
+            'meals_had_today': list(meals_had),
+            'coaching_note': f"Here are some {next_meal} ideas for you.",
+            'suggestions': result,
+        })
+    logging.warning("Smart suggest unexpected format: %s", str(result)[:200])
+    return jsonify({'error': 'Invalid response from AI'}), 500
+
+
 @recipes_bp.route('/suggest-llm', methods=['POST'])
 def suggest_llm():
     """Generate recipe suggestions via LLM, then cache them in the DB."""
@@ -525,30 +807,52 @@ def meal_plan():
         rd = {'ingredients': json.loads(row['ingredients']) if row['ingredients'] else []}
         recipe_ingredients_cache[row['id']] = _extract_ingredient_words(rd)
 
-    for day in days:
+    target_carbs = data.get('target_carbs', int(target_cal * 0.4 / 4))
+    target_fat = data.get('target_fat', int(target_cal * 0.25 / 9))
+
+    # Calorie distribution: breakfast 25%, lunch 30%, dinner 30%, snack 15%
+    _SLOT_FRACTIONS = {'breakfast': 0.25, 'lunch': 0.30, 'dinner': 0.30, 'snack': 0.15}
+
+    # Track protein types used per day for diversity
+    day_protein_types = set()
+
+    for day_idx, day in enumerate(days):
         meals = []
+        day_protein_types.clear()
+        day_meal_names = []
+
         for slot in meal_slots:
-            fraction = 0.2 if slot == 'snack' else 0.27
+            fraction = _SLOT_FRACTIONS[slot]
+            # Map time of day for each slot
+            slot_hour = {'breakfast': 8, 'lunch': 12, 'dinner': 19, 'snack': 15}.get(slot, 12)
+
             context = {
                 'meal_types': [slot],
                 'diet_filters': diet_filters,
                 'goal': goal,
                 'remaining': {
                     'calories': int(target_cal * fraction),
-                    'protein': int(target_prot * fraction)
+                    'protein': int(target_prot * fraction),
+                    'carbs': int(target_carbs * fraction),
+                    'fat': int(target_fat * fraction),
                 },
                 'liked': liked,
-                'disliked': disliked
+                'disliked': disliked,
+                'hour_of_day': slot_hour,
+                'day_of_week': day_idx,
+                'today_meal_names': day_meal_names,
+                'recent_meal_names': [m['name'] for d in plan for m in d.get('meals', [])],
             }
-            results = suggest_recipes(context, limit=10)
+            results = suggest_recipes(context, limit=15)
 
-            # Re-rank by ingredient overlap with existing plan
-            if plan_ingredients and results:
+            # Re-rank by ingredient overlap with existing plan + protein diversity
+            if results:
                 for r in results:
                     r_ings = recipe_ingredients_cache.get(r['id'], set())
                     overlap = len(r_ings & plan_ingredients)
-                    r['_overlap_score'] = min(overlap * 2, 15)
-                results.sort(key=lambda r: -(r.get('_overlap_score', 0) + (10 - r['rank'])))
+                    r['_plan_score'] = min(overlap * 2, 15)
+
+                results.sort(key=lambda r: -(r.get('_plan_score', 0) + (15 - r['rank'])))
 
             pick = None
             for r in results:
@@ -562,6 +866,7 @@ def meal_plan():
 
             used_ids.add(pick['id'])
             plan_ingredients.update(recipe_ingredients_cache.get(pick['id'], set()))
+            day_meal_names.append(pick['name'])
 
             meals.append({
                 'type': slot,
@@ -908,3 +1213,184 @@ def grocery_list():
         'pantry_items': sum(1 for i in items if i['in_pantry']),
         'to_buy': sum(1 for i in items if not i['in_pantry']),
     })
+<<<<<<< Updated upstream
+=======
+
+
+# ---------------------------------------------------------------------------
+#  Food Parsing (text + image) — uses server-side LLM key
+# ---------------------------------------------------------------------------
+
+_FOOD_PARSE_PROMPT = """You are a nutrition expert. Parse the user's food description into individual items with estimated macros.
+IMPORTANT: Fix any typos or misspellings in food names. Use the correct, properly spelled food name in the output.
+Examples: "seabas" → "Sea Bass", "chiken" → "Chicken", "brocoli" → "Broccoli", "avacado" → "Avocado", "spageti" → "Spaghetti"
+
+Reply with ONLY valid JSON in this exact format, no other text:
+{
+  "items": [
+    {"name": "Properly Spelled Food Name", "calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar_natural": 0, "sugar_processed": 0, "fiber": 0}
+  ],
+  "total": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar_natural": 0, "sugar_processed": 0, "fiber": 0}
+}
+Rules:
+- ALWAYS fix typos and use proper food names (capitalize properly)
+- Estimate portions if not specified (use typical serving sizes)
+- Be accurate with calorie and macro estimates based on standard nutritional data
+- Round all numbers to integers
+- Include ALL items mentioned
+- If a quantity is mentioned, calculate for that quantity
+- sugar_natural = sugars from fruit, dairy, honey, whole foods
+- sugar_processed = sugars from added/refined sources (white sugar, HFCS, syrups, candy, soda, packaged foods)
+- If unsure, classify as processed"""
+
+_FOOD_IMAGE_SYSTEM = """You are a nutrition expert. Analyze the food in this image and estimate macros for each item you can see.
+Use proper, correctly spelled food names (capitalize properly).
+
+Reply with ONLY valid JSON in this exact format, no other text:
+{
+  "items": [
+    {"name": "Properly Spelled Food Name", "calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar_natural": 0, "sugar_processed": 0, "fiber": 0}
+  ],
+  "total": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "sugar_natural": 0, "sugar_processed": 0, "fiber": 0}
+}
+Rules:
+- Identify ALL food items visible in the image
+- Use proper food names (e.g. "Grilled Sea Bass" not "seabas")
+- Estimate portion sizes visually
+- Be accurate with calorie and macro estimates
+- Round all numbers to integers
+- If you can't identify something, make your best estimate and note it in the name
+- sugar_natural = sugars from fruit, dairy, honey, whole foods
+- sugar_processed = sugars from added/refined sources (white sugar, HFCS, syrups, candy, soda, packaged foods)
+- If unsure, classify as processed"""
+
+
+def _recalculate_total(parsed):
+    """Recalculate total from items to ensure consistency."""
+    fields = ('calories', 'protein', 'carbs', 'fat', 'sugar_natural', 'sugar_processed', 'fiber')
+    parsed['total'] = {f: sum(item.get(f, 0) for item in parsed.get('items', [])) for f in fields}
+    return parsed
+
+
+@recipes_bp.route('/parse-food', methods=['POST'])
+def parse_food():
+    """Parse a text food description into items with macros using server-side LLM."""
+    data = request.get_json() or {}
+    description = (data.get('description') or '').strip()
+    if not description:
+        return jsonify({'error': 'No food description provided'}), 400
+
+    try:
+        from backend.llm_client import call_llm_json
+        prompt = f"{_FOOD_PARSE_PROMPT}\n\nFood description: {description}"
+        result = call_llm_json(prompt, max_tokens=1500)
+        # Handle LLM returning a plain list instead of {items: [...]}
+        if isinstance(result, list):
+            result = {'items': result}
+        if not isinstance(result, dict) or 'items' not in result:
+            logging.warning("Food parse unexpected result: %s", str(result)[:300])
+            return jsonify({'error': 'Failed to parse food data'}), 500
+        result = _recalculate_total(result)
+        _log_cost('parse_food', 'llm')
+        return jsonify(result)
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        logging.warning("Food parse failed: %s", e, exc_info=True)
+        return jsonify({'error': f'Food parse error: {e}'}), 500
+
+
+@recipes_bp.route('/parse-food-image', methods=['POST'])
+def parse_food_image():
+    """Parse a food image into items with macros using server-side LLM vision."""
+    data = request.get_json() or {}
+    image = (data.get('image') or '').strip()
+    if not image:
+        return jsonify({'error': 'No image data provided'}), 400
+
+    try:
+        from backend.llm_client import call_llm_vision
+        result = call_llm_vision(
+            _FOOD_IMAGE_SYSTEM,
+            image,
+            'Analyze this food image and estimate the macros for everything you see.',
+            max_tokens=1500,
+        )
+        if not isinstance(result, dict) or 'items' not in result:
+            return jsonify({'error': 'Failed to analyze food image'}), 500
+        result = _recalculate_total(result)
+        _log_cost('parse_food_image', 'llm')
+        return jsonify(result)
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        logging.warning("Food image parse failed: %s", e, exc_info=True)
+        return jsonify({'error': 'Failed to analyze food image. Please try again.'}), 500
+
+
+@recipes_bp.route('/gap-advice', methods=['POST'])
+def gap_advice():
+    """Get advice on how to fill remaining macro gaps using server-side LLM."""
+    from backend.llm_client import call_llm_json
+
+    data = request.get_json() or {}
+    remaining = data.get('remaining', {})
+    totals = data.get('totals', {})
+    profile_info = data.get('profile', {})
+    meals_log = data.get('meals_log', '')
+    hour = data.get('hour', 12)
+    health_conditions = data.get('health_conditions', [])
+
+    health_note = ''
+    if health_conditions:
+        health_note = f"\nHealth conditions: {', '.join(health_conditions)}. All suggestions must be safe for these."
+
+    prompt = f"""You are an elite sports nutritionist. The client has macro gaps to fill before the day ends. Suggest a mix of whole food quick options AND supplement options (protein shakes, bars, etc.) to close the gap efficiently.
+Reply with ONLY valid JSON, no other text:
+{{
+  "assessment": "1-2 sentence personalized assessment of their current gap situation and urgency",
+  "options": [
+    {{
+      "type": "supplement",
+      "name": "Option name",
+      "description": "Specific product/food with exact portions",
+      "calories": 0, "protein": 0, "carbs": 0, "fat": 0,
+      "tip": "Optional pro tip"
+    }}
+  ]
+}}
+The "type" field MUST be exactly "supplement" or "food" (no other values).
+Rules:
+- Provide exactly 5 options, mix of supplements (shakes, bars, powders, BCAAs) and whole foods (quick options like Greek yogurt, eggs, cottage cheese, jerky, etc.)
+- Order from most practical/efficient to least
+- Be specific: "1 scoop whey isolate (30g) in 250ml water" not just "protein shake"
+- For supplements: mention common types (whey, casein, plant-based, collagen) and when each is best
+- Consider time of day: late evening = casein, post-workout = whey, etc.
+- If client is vegan/dairy-free, suggest plant-based alternatives
+- Factor in remaining calorie budget - don't suggest options that blow the calorie target
+- If protein gap is small (<15g), suggest food over supplements{health_note}
+
+Client: {profile_info.get('gender', 'unknown')}, {profile_info.get('age', '?')}yo, {profile_info.get('weight', '?')}{profile_info.get('unit', 'kg')}, Goal: {profile_info.get('goal', 'maintenance')}
+Daily targets: {profile_info.get('calories', '?')}cal / {profile_info.get('protein', '?')}g P / {profile_info.get('carbs', '?')}g C / {profile_info.get('fat', '?')}g F
+Eaten so far: {totals.get('calories', 0)}cal / {totals.get('protein', 0)}g P / {totals.get('carbs', 0)}g C / {totals.get('fat', 0)}g F
+Remaining: {remaining.get('calories', 0)}cal / {remaining.get('protein', 0)}g P / {remaining.get('carbs', 0)}g C / {remaining.get('fat', 0)}g F
+Meals today: {meals_log or 'Nothing yet'}
+Time now: {hour}:00
+
+How should they fill the remaining macro gaps most efficiently?"""
+
+    try:
+        result = call_llm_json(prompt, max_tokens=2000)
+        # Handle LLM returning a plain list of options
+        if isinstance(result, list):
+            result = {'assessment': 'Here are your best options to fill the gap:', 'options': result}
+        if isinstance(result, dict) and 'options' in result:
+            return jsonify(result)
+        logging.warning("Gap advice unexpected format: %s", str(result)[:300])
+        return jsonify({'error': 'Invalid response format'}), 500
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 503
+    except Exception as e:
+        logging.warning("Gap advice failed: %s", e, exc_info=True)
+        return jsonify({'error': f'Gap advice failed: {e}'}), 500
+>>>>>>> Stashed changes

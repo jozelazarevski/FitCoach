@@ -1335,6 +1335,51 @@ html, body {
 }
 
 /* Macro Gap Card */
+/* Weekly Summary */
+.weekly-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.weekly-stat {
+  text-align: center;
+  padding: 8px 4px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+}
+.weekly-stat-val { font-size: 20px; font-weight: 700; }
+.weekly-stat-label { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+.weekly-stat-target { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+.weekly-tip {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 8px 10px;
+  border-left: 3px solid var(--primary);
+  background: var(--bg);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  line-height: 1.4;
+}
+[data-theme="light"] .weekly-stat,
+[data-theme="light"] .weekly-tip { background: var(--bg-input); }
+
+/* Coaching Insights Card */
+.coaching-insights-card { padding-bottom: 8px; }
+.coaching-insight {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.coaching-insight-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+.coaching-insight-text { color: var(--text); flex: 1; }
+[data-theme="light"] .coaching-insight { background: var(--bg-input); }
+
 .gap-card {
   border-color: rgba(255, 171, 64, 0.3);
 }
@@ -2345,7 +2390,7 @@ html, body {
   position: absolute;
   inset: 5px;
   border-radius: 50%;
-  background: var(--card-bg);
+  background: var(--bg-card);
 }
 
 .mh-variety-ring span {
@@ -2428,4 +2473,8 @@ html, body {
 .mh-insight-low_protein { border-left: 2px solid var(--accent-orange, #f59e0b); }
 .mh-insight-high_calories { border-left: 2px solid var(--accent-red, #ef4444); }
 .mh-insight-repetition { border-left: 2px solid var(--accent-blue, #3b82f6); }
+[data-theme="light"] .mh-tag { background: rgba(168, 85, 247, 0.08); }
+[data-theme="light"] .mh-insight { background: rgba(0,0,0,0.03); }
+[data-theme="light"] .mh-insights { border-top-color: rgba(0,0,0,0.08); }
+[data-theme="light"] .mh-variety-ring { background: conic-gradient(var(--accent-purple, #a855f7) calc(var(--variety-pct) * 1%), rgba(0,0,0,0.06) 0); }
 .mh-insight-missing_meals { border-left: 2px solid var(--text-dim); }

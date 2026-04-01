@@ -1,8 +1,14 @@
 import json
 import random
+import time
 from datetime import date
 
 from backend.db import use_db
+
+# Track recently suggested recipe IDs to avoid repetition across requests
+# Format: {recipe_id: timestamp}
+_recently_suggested = {}
+_RECENT_SUGGEST_TTL = 3600  # 1 hour
 
 
 def recipe_to_dict(row):
@@ -281,6 +287,42 @@ def suggest_recipes(context, limit=5):
     recent_cuisines = [c.lower() for c in context.get('recent_cuisines', [])]
     recent_protein_sources = [p.lower() for p in context.get('recent_protein_sources', [])]
     meals_eaten_today = context.get('meals_eaten_today', 0)
+    today_meal_names = [n.lower() for n in context.get('today_meal_names', [])]
+    # Build keyword sets for diversity checking
+    _SEAFOOD = {'shrimp', 'fish', 'salmon', 'tuna', 'cod', 'tilapia', 'prawn', 'prawns',
+                 'crab', 'lobster', 'mahi', 'halibut', 'trout', 'sardine', 'mackerel',
+                 'anchovy', 'anchovies', 'clam', 'clams', 'mussel', 'mussels', 'oyster',
+                 'oysters', 'squid', 'calamari', 'octopus', 'scallop', 'scallops',
+                 'swordfish', 'bass', 'snapper', 'haddock', 'catfish', 'ceviche',
+                 'sushi', 'sashimi', 'seafood', 'shellfish'}
+    _POULTRY = {'chicken', 'turkey', 'duck', 'poultry', 'hen', 'wings', 'thigh', 'thighs', 'breast'}
+    _RED_MEAT = {'beef', 'steak', 'pork', 'lamb', 'veal', 'bison', 'venison',
+                 'burger', 'meatball', 'meatballs', 'ribs', 'bacon', 'ham', 'sausage'}
+    _FOOD_GROUPS = [('seafood', _SEAFOOD), ('poultry', _POULTRY), ('red_meat', _RED_MEAT)]
+
+    def _detect_food_groups(text):
+        """Detect which food groups appear in a text string using substring matching."""
+        text_lower = text.lower()
+        groups = set()
+        for group_name, group_words in _FOOD_GROUPS:
+            for keyword in group_words:
+                if keyword in text_lower:
+                    groups.add(group_name)
+                    break
+        return groups
+
+    # Today's food groups — HARD EXCLUDE same protein type twice in one day
+    _today_groups = set()
+    for meal_name in today_meal_names:
+        _today_groups |= _detect_food_groups(meal_name)
+
+    # Weekly food group frequency (moderate penalty)
+    _weekly_group_counts = {}
+    for meal_name in recent_meal_names:
+        words = set(meal_name.split())
+        for group_name, group_words in _FOOD_GROUPS:
+            if words & group_words:
+                _weekly_group_counts[group_name] = _weekly_group_counts.get(group_name, 0) + 1
     health_conditions = context.get('health_conditions', [])
     pantry = [p.lower().strip() for p in context.get('pantry', [])]
     workout_cals = context.get('workout_calories_today', 0)
@@ -408,18 +450,41 @@ def suggest_recipes(context, limit=5):
                         score -= 1000
                         break
 
-        # ── 2. Meal type match (+30) ──
+        # ── 2. Meal type match (+30 / -200) ──
+        recipe_meal = recipe.get('meal_type', 'any')
         if meal_types:
-            if recipe.get('meal_type') in meal_types:
+            if recipe_meal in meal_types:
                 score += 30
-            elif recipe.get('meal_type') == 'any':
-                score += 10
+            elif recipe_meal == 'any':
+                score += 5
+            else:
+                # Wrong meal type — heavy penalty
+                # Breakfast is special: lamb chops, steak, etc. should never appear
+                if 'breakfast' in meal_types and recipe_meal in ('dinner', 'lunch'):
+                    score -= 200
+                elif 'dinner' in meal_types and recipe_meal == 'breakfast':
+                    score -= 100
+                else:
+                    score -= 50
 
-        # ── 3. Time-of-day (+15) ──
-        if time_meals and recipe.get('meal_type') in time_meals:
+        # ── 3. Time-of-day (+15 / -100) ──
+        if time_meals and recipe_meal in time_meals:
             score += 15
-        elif time_meals and recipe.get('meal_type') == 'any':
+        elif time_meals and recipe_meal == 'any':
             score += 5
+        elif time_meals and recipe_meal not in time_meals and recipe_meal != 'any':
+            # Dinner items in the morning, breakfast at night, etc.
+            score -= 30
+
+        # ── 3b. Meal suitability check (tag-based) ──
+        meal_suit = rtags.get('meal_suitability', [])
+        if meal_types:
+            requested = meal_types[0] if meal_types else 'dinner'
+            suit_key = f'{requested}_suitable'
+            if suit_key in meal_suit:
+                score += 25  # Recipe is suitable for this meal
+            else:
+                score -= 150  # Recipe is NOT suitable — heavy penalty
 
         # ── 4. Goal alignment (+25) ──
         if goal and goal in rtags.get('goal', []):
@@ -566,43 +631,77 @@ def suggest_recipes(context, limit=5):
             if 'anti_inflammatory' in rtags.get('health', []):
                 score += 5
 
-        # ── 11. Cuisine diversity (-15) ──
+        # ── 11. Cuisine diversity (-30) ──
         recipe_cuisine = (recipe.get('cuisine') or '').lower()
         if recipe_cuisine and recipe_cuisine in cuisine_counts:
             freq = cuisine_counts[recipe_cuisine]
-            score -= min(freq * 5, 15)
+            score -= min(freq * 8, 30)
 
-        # ── 12. Protein source rotation (-12 / +10) ──
+        # ── 12. Protein source rotation (-35 / +15) ──
         recipe_psources = rtags.get('protein_source', [])
         if recipe_psources and protein_counts:
             for ps in recipe_psources:
                 ps_lower = ps.lower()
                 if ps_lower in protein_counts:
-                    score -= min(protein_counts[ps_lower] * 4, 12)
+                    score -= min(protein_counts[ps_lower] * 8, 35)
                     break
         # Boost recipes with protein sources the user hasn't eaten recently
         if recipe_psources and missing_proteins:
             for ps in recipe_psources:
                 if ps.lower() in missing_proteins:
-                    score += 10
+                    score += 20
                     break
 
-        # ── 13. Recent meal penalty (-30) ──
+        # ── 13. Recent meal penalty (-50, cumulative) ──
         name_lower = recipe['name'].lower()
         name_words = set(name_lower.split())
+        recipe_words = name_words  # alias for later sections
+        weekly_repeat_penalty = 0
         if recent_meal_names:
             for recent in recent_meal_names:
                 recent_words = recent.split()
                 if name_lower == recent:
-                    score -= 30
-                    break
-                overlap = sum(1 for w in recent_words if len(w) > 3 and w in name_words)
-                if overlap >= 2:
-                    score -= 20
-                    break
-                elif overlap == 1 and len(recent_words) <= 3:
-                    score -= 10
-                    break
+                    weekly_repeat_penalty += 50  # exact repeat this week
+                elif sum(1 for w in recent_words if len(w) > 3 and w in name_words) >= 2:
+                    weekly_repeat_penalty += 30  # very similar dish
+                elif sum(1 for w in recent_words if len(w) > 3 and w in name_words) == 1 and len(recent_words) <= 3:
+                    weekly_repeat_penalty += 15  # partial overlap
+            score -= min(weekly_repeat_penalty, 80)  # cap at -80
+
+        # ── 13b. Same-day protein exclusion (-500) ──
+        # Do NOT suggest the same protein type twice in one day
+        if _today_groups:
+            # Use primary_protein tag for reliable detection
+            recipe_prot = rtags.get('primary_protein', ['none'])
+            if isinstance(recipe_prot, list):
+                recipe_prot = recipe_prot[0] if recipe_prot else 'none'
+            # Map primary_protein to food groups
+            _PROT_TO_GROUP = {
+                'chicken': 'poultry', 'turkey': 'poultry',
+                'beef': 'red_meat', 'pork': 'red_meat', 'lamb': 'red_meat',
+                'salmon': 'seafood', 'tuna': 'seafood', 'shrimp': 'seafood', 'white_fish': 'seafood',
+            }
+            recipe_group = _PROT_TO_GROUP.get(recipe_prot)
+            if recipe_group and recipe_group in _today_groups:
+                score -= 500  # Hard exclude — never repeat protein type same day
+            # Fallback: also check name/ingredients for safety
+            elif not recipe_group:
+                recipe_groups = _detect_food_groups(name_lower)
+                ing_text = recipe.get('_ing_text', '')
+                if ing_text:
+                    recipe_groups |= _detect_food_groups(ing_text)
+                if recipe_groups & _today_groups:
+                    score -= 500
+
+        # ── 13c. Weekly food group diversity (-25 per repeat) ──
+        if _weekly_group_counts:
+            rgroups = _detect_food_groups(name_lower) | _detect_food_groups(recipe.get('_ing_text', ''))
+            for grp in rgroups:
+                freq = _weekly_group_counts.get(grp, 0)
+                if freq >= 3:
+                    score -= 25  # Ate this type 3+ times this week
+                elif freq >= 2:
+                    score -= 12  # Ate this type twice this week
 
         # ── 14. Preference match with recency weighting (+15 / -100) ──
         for idx, liked_food in enumerate(liked):
@@ -731,15 +830,101 @@ def suggest_recipes(context, limit=5):
         if hour_of_day is not None and hour_of_day >= 21 and cook_time > 30:
             score -= 4
 
-        # ── 23. Random variety (+0-5) ──
-        score += random.uniform(0, 5)
+        # ── 24. Flavor diversity (+10 / -10) ──
+        # Penalize if today's meals already have the same dominant flavor
+        recipe_flavors = set(rtags.get('flavor_profile', []))
+        if today_meal_names and recipe_flavors:
+            # Build today's flavor profile from recent meal tags
+            today_flavor_counts = {}
+            for tmeal in today_meal_names:
+                for flav in recipe_flavors:
+                    # Simple: check if flavor-indicating words appear in today's meal names
+                    if flav in ('spicy_hot',) and any(w in tmeal for w in ('spicy', 'chili', 'hot')):
+                        today_flavor_counts[flav] = today_flavor_counts.get(flav, 0) + 1
+                    elif flav in ('cheesy',) and 'cheese' in tmeal:
+                        today_flavor_counts[flav] = today_flavor_counts.get(flav, 0) + 1
+            for flav, cnt in today_flavor_counts.items():
+                if flav in recipe_flavors and cnt >= 1:
+                    score -= 10  # Already had this flavor today
+        # Boost uncommon/diverse flavors
+        diverse_flavors = {'smoky', 'umami', 'citrusy', 'earthy', 'herbal'}
+        if recipe_flavors & diverse_flavors:
+            score += 5
+
+        # ── 25. Prep style preference (+8 / -5) ──
+        recipe_prep = set(rtags.get('prep_style', []))
+        if hour_of_day is not None:
+            # Evening/late: prefer hands_off, one_pot, minimal_cooking
+            if hour_of_day >= 19 and recipe_prep & {'hands_off', 'one_pot', 'minimal_cooking'}:
+                score += 8
+            # Morning: prefer no_cook, minimal_cooking
+            if hour_of_day < 10 and recipe_prep & {'no_cook', 'minimal_cooking'}:
+                score += 8
+            # Weeknight (Mon-Thu evening): boost quick/easy
+            if day_of_week in (0, 1, 2, 3) and hour_of_day >= 17:
+                if recipe_prep & {'one_pot', 'hands_off', 'minimal_cooking'}:
+                    score += 5
+            # Weekend: don't penalize active_cooking
+            if day_of_week in (5, 6) and 'active_cooking' in recipe_prep:
+                score += 3
+        # Penalize marinating/chilling if user wants quick
+        if mins_since_meal is not None and mins_since_meal > 300:
+            # User is hungry (5+ hours since last meal) — penalize slow prep
+            if recipe_prep & {'requires_marinating', 'requires_chilling'}:
+                score -= 10
+
+        # ── 26. Equipment availability (+5 / -5) ──
+        recipe_equip = set(rtags.get('equipment_needs', []))
+        # Boost simple equipment
+        if 'no_special_equipment' in recipe_equip:
+            score += 5
+        if 'stovetop_only' in recipe_equip and not (recipe_equip & {'oven_required', 'grill_required'}):
+            score += 3
+        # Penalize specialty equipment for weeknight quick meals
+        if hour_of_day is not None and hour_of_day >= 17 and day_of_week in (0, 1, 2, 3):
+            if recipe_equip & {'grill_required', 'slow_cooker'}:
+                score -= 5
+
+        # ── 27. Primary protein diversity (tag-based) (+15 / -20) ──
+        # Use primary_protein tag for weekly rotation
+        recipe_prot_tag = rtags.get('primary_protein', ['none'])
+        if isinstance(recipe_prot_tag, list):
+            recipe_prot_tag = recipe_prot_tag[0] if recipe_prot_tag else 'none'
+        if recipe_prot_tag != 'none' and protein_counts:
+            # Check how often this specific protein appeared this week
+            # protein_counts may use tag names or raw names
+            prot_freq = protein_counts.get(recipe_prot_tag, 0)
+            if prot_freq == 0:
+                score += 15  # Novel protein this week — big boost
+            elif prot_freq == 1:
+                score += 5   # Only had it once — still ok
+            elif prot_freq >= 3:
+                score -= 20  # Had it 3+ times this week — penalize
+
+        # ── 28. Random variety ──
+        score += random.uniform(0, 15)
 
         recipe['tags'] = rtags
+
+        # Penalize recipes that were recently suggested (avoid same results on refresh)
+        now = time.time()
+        rid = recipe['id']
+        if rid in _recently_suggested and (now - _recently_suggested[rid]) < _RECENT_SUGGEST_TTL:
+            score -= 25
+
         scored.append((score, recipe))
+
+    # Clean up expired entries
+    now = time.time()
+    expired = [k for k, v in _recently_suggested.items() if now - v > _RECENT_SUGGEST_TTL]
+    for k in expired:
+        del _recently_suggested[k]
 
     scored.sort(key=lambda x: -x[0])
     results = []
     for i, (score, recipe) in enumerate(scored[:limit]):
+        # Record as recently suggested
+        _recently_suggested[recipe['id']] = time.time()
         results.append({
             'rank': i + 1,
             'id': recipe['id'],
@@ -914,7 +1099,34 @@ def _generate_why(recipe, context, rank, ing_text=''):
     if recipe.get('cuisine') and recipe['cuisine'] != 'International':
         reasons.append(f"{recipe['cuisine']} cuisine")
 
-    return '. '.join(reasons[:5]) if reasons else "Good match for your goals"
+    # Flavor profile highlights
+    flavors = rtags.get('flavor_profile', [])
+    flavor_labels = {'smoky': 'smoky flavor', 'umami': 'rich umami taste', 'citrusy': 'bright citrus notes',
+                     'herbal': 'fresh herbs', 'spicy_hot': 'spicy kick'}
+    for flav, label in flavor_labels.items():
+        if flav in flavors and len(reasons) < 6:
+            reasons.append(label)
+            break
+
+    # Prep style highlights
+    prep = rtags.get('prep_style', [])
+    if 'no_cook' in prep and len(reasons) < 6:
+        reasons.append("no cooking required")
+    elif 'one_pot' in prep and len(reasons) < 6:
+        reasons.append("one-pot — easy cleanup")
+    elif 'hands_off' in prep and len(reasons) < 6:
+        reasons.append("mostly hands-off cooking")
+
+    # Primary protein for context
+    prot_tag = rtags.get('primary_protein', ['none'])
+    if isinstance(prot_tag, list):
+        prot_tag = prot_tag[0] if prot_tag else 'none'
+    if prot_tag != 'none' and len(reasons) < 6:
+        missing_prots = context.get('missing_proteins', [])
+        if prot_tag in missing_prots:
+            reasons.append(f"{prot_tag} — you haven't had this recently")
+
+    return '. '.join(reasons[:6]) if reasons else "Good match for your goals"
 
 
 def insert_recipe(recipe_data, tags_dict=None):

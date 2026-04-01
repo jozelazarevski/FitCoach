@@ -27,7 +27,7 @@ MAX_SYNC_SIZE_BYTES = int(os.getenv('MAX_SYNC_SIZE_BYTES', 5 * 1024 * 1024))  # 
 #  LLM provider settings (model versions pinned in config, not source code)
 # ---------------------------------------------------------------------------
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
-ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-3-5-haiku-20241022')
+ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1')
 

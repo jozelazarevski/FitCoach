@@ -23,25 +23,25 @@ from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, OLLAMA_BASE_URL, OLLAMA_M
 def _get_provider_config():
     """Get the best available LLM provider config from DB or env.
 
-    Priority: Anthropic DB key > Anthropic env key > Ollama (if configured).
+    Priority: Anthropic env key > Anthropic DB key > Ollama (if configured).
     """
     from backend.api.admin import get_active_api_key
 
-    # Try Anthropic from DB first (primary for web deployment)
+    # Try Anthropic from env first (simplest, most reliable)
+    if ANTHROPIC_API_KEY and anthropic:
+        return {
+            'provider': 'anthropic',
+            'api_key': ANTHROPIC_API_KEY,
+            'model': ANTHROPIC_MODEL
+        }
+
+    # Try Anthropic from DB (admin panel)
     anthropic_data = get_active_api_key('anthropic')
     if anthropic_data and anthropic:
         return {
             'provider': 'anthropic',
             'api_key': anthropic_data['api_key'],
             'model': anthropic_data.get('model', '') or ANTHROPIC_MODEL
-        }
-
-    # Try Anthropic from env
-    if ANTHROPIC_API_KEY and anthropic:
-        return {
-            'provider': 'anthropic',
-            'api_key': ANTHROPIC_API_KEY,
-            'model': ANTHROPIC_MODEL
         }
 
     # Fallback: Ollama (local dev only)
@@ -114,11 +114,14 @@ def _call_ollama(base_url, model, prompt, max_tokens):
 def _call_anthropic(api_key, model, prompt, max_tokens):
     """Call Anthropic Claude API."""
     client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}]
+        )
+    except anthropic.AuthenticationError:
+        raise RuntimeError("Invalid API key. Please update your Anthropic API key in the admin panel.")
     return response.content[0].text
 
 

@@ -132,6 +132,46 @@ def tag_stats():
     return jsonify(get_tag_stats())
 
 
+@admin_bp.route('/retag', methods=['POST'])
+def retag_recipes():
+    """Retag all recipes in the database."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.get_json() or {}
+    source = data.get('source')
+    missing_only = data.get('missing_only', False)
+
+    def _run_retag():
+        from backend.retag import retag_all
+        retag_all(source=source, missing_only=missing_only)
+
+    t = threading.Thread(target=_run_retag, daemon=True)
+    t.start()
+    return jsonify({'message': 'Retagging started in background. Check server logs for progress.'})
+
+
+@admin_bp.route('/tags/full', methods=['GET'])
+def full_tag_list():
+    """Get complete tag list grouped by dimension with counts."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    with use_db() as db:
+        rows = db.execute("""
+            SELECT dimension, tag, COUNT(*) as count
+            FROM recipe_tags
+            GROUP BY dimension, tag
+            ORDER BY dimension, count DESC
+        """).fetchall()
+    result = {}
+    for r in rows:
+        dim = r['dimension']
+        if dim not in result:
+            result[dim] = []
+        result[dim].append({'tag': r['tag'], 'count': r['count']})
+    return jsonify(result)
+
+
 @admin_bp.route('/recipes', methods=['GET'])
 def list_admin_recipes():
     if not _check_admin(request):
@@ -353,6 +393,114 @@ def delete_api_key(key_id):
         db.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
         db.commit()
     return jsonify({'message': 'API key deleted'})
+
+
+@admin_bp.route('/recipes/bulk-delete', methods=['POST'])
+def bulk_delete_recipes():
+    """Bulk delete recipes by filter criteria."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.get_json() or {}
+    mode = data.get('mode', '')  # 'all', 'source', 'batch', 'ids'
+    source = data.get('source', '')
+    batch = data.get('batch', '')
+    ids = data.get('ids', [])
+
+    with use_db() as db:
+        if mode == 'all':
+            count = db.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
+            db.execute("DELETE FROM recipe_tags")
+            db.execute("DELETE FROM recipes")
+            db.commit()
+            return jsonify({'message': f'Deleted all {count} recipes', 'deleted': count})
+        elif mode == 'source' and source:
+            count = db.execute("SELECT COUNT(*) FROM recipes WHERE source = ?", (source,)).fetchone()[0]
+            ids_to_del = [r[0] for r in db.execute("SELECT id FROM recipes WHERE source = ?", (source,)).fetchall()]
+            if ids_to_del:
+                placeholders = ','.join('?' * len(ids_to_del))
+                db.execute(f"DELETE FROM recipe_tags WHERE recipe_id IN ({placeholders})", ids_to_del)
+                db.execute(f"DELETE FROM recipes WHERE id IN ({placeholders})", ids_to_del)
+            db.commit()
+            return jsonify({'message': f'Deleted {count} recipes from source "{source}"', 'deleted': count})
+        elif mode == 'batch' and batch:
+            count = db.execute("SELECT COUNT(*) FROM recipes WHERE generation_batch = ?", (batch,)).fetchone()[0]
+            ids_to_del = [r[0] for r in db.execute("SELECT id FROM recipes WHERE generation_batch = ?", (batch,)).fetchall()]
+            if ids_to_del:
+                placeholders = ','.join('?' * len(ids_to_del))
+                db.execute(f"DELETE FROM recipe_tags WHERE recipe_id IN ({placeholders})", ids_to_del)
+                db.execute(f"DELETE FROM recipes WHERE id IN ({placeholders})", ids_to_del)
+            db.commit()
+            return jsonify({'message': f'Deleted {count} recipes from batch "{batch}"', 'deleted': count})
+        elif mode == 'ids' and ids:
+            ids = [int(i) for i in ids[:500]]
+            placeholders = ','.join('?' * len(ids))
+            db.execute(f"DELETE FROM recipe_tags WHERE recipe_id IN ({placeholders})", ids)
+            count = db.execute(f"DELETE FROM recipes WHERE id IN ({placeholders})", ids).rowcount
+            db.commit()
+            return jsonify({'message': f'Deleted {count} recipes', 'deleted': count})
+        else:
+            return jsonify({'error': 'Invalid mode. Use: all, source, batch, or ids'}), 400
+
+
+@admin_bp.route('/recipes/sources', methods=['GET'])
+def recipe_sources():
+    """Get distinct recipe sources and batches for bulk management."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    with use_db() as db:
+        sources = db.execute(
+            "SELECT source, COUNT(*) as count FROM recipes GROUP BY source ORDER BY count DESC"
+        ).fetchall()
+        batches = db.execute(
+            "SELECT generation_batch, source, COUNT(*) as count FROM recipes WHERE generation_batch IS NOT NULL GROUP BY generation_batch ORDER BY count DESC LIMIT 50"
+        ).fetchall()
+    return jsonify({
+        'sources': [{'source': r['source'], 'count': r['count']} for r in sources],
+        'batches': [{'batch': r['generation_batch'], 'source': r['source'], 'count': r['count']} for r in batches],
+    })
+
+
+@admin_bp.route('/api-keys/<int:key_id>/validate', methods=['POST'])
+def validate_api_key(key_id):
+    """Test whether an API key is valid by making a minimal API call."""
+    if not _check_admin(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    with use_db() as db:
+        row = db.execute(
+            "SELECT provider, api_key FROM api_keys WHERE id = ?", (key_id,)
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'Key not found'}), 404
+
+        provider = row['provider']
+        from backend.encryption import decrypt_api_key
+        api_key = decrypt_api_key(row['api_key'])
+
+    if provider == 'anthropic':
+        try:
+            import anthropic as _anthropic
+            client = _anthropic.Anthropic(api_key=api_key)
+            client.messages.create(
+                model='claude-haiku-4-5-20251001',
+                max_tokens=10,
+                messages=[{'role': 'user', 'content': 'Hi'}],
+            )
+            return jsonify({'valid': True, 'message': 'API key is valid'})
+        except Exception as e:
+            return jsonify({'valid': False, 'message': str(e)})
+    elif provider == 'ollama':
+        try:
+            import requests as _req
+            r = _req.get(f"{api_key}/api/tags", timeout=5)
+            if r.ok:
+                return jsonify({'valid': True, 'message': 'Ollama is reachable'})
+            return jsonify({'valid': False, 'message': f'Ollama returned status {r.status_code}'})
+        except Exception as e:
+            return jsonify({'valid': False, 'message': str(e)})
+
+    return jsonify({'valid': False, 'message': f'Unknown provider: {provider}'})
 
 
 def get_active_api_key(provider='anthropic'):

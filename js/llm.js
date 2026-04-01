@@ -33,7 +33,7 @@ const LLM = {
 
       // Gather recent meal history via MealHistory intelligence
       const mealCtx = typeof MealHistory !== 'undefined'
-        ? MealHistory.getSuggestionContext(5)
+        ? MealHistory.getSuggestionContext(7)
         : { recent_meal_names: [], recent_cuisines: [], recent_protein_sources: [] };
       const recentMealNames = mealCtx.recent_meal_names;
       const recentCuisines = mealCtx.recent_cuisines;
@@ -42,8 +42,13 @@ const LLM = {
       const todayKey = Store.getTodayKey();
 
       // Count meals already eaten today to compute adaptive fraction
-      const todayMeals = data.logs[todayKey]?.meals || [];
+      const todayMealsEntry = data.logs[todayKey];
+      const todayMeals = Array.isArray(todayMealsEntry) ? todayMealsEntry : (todayMealsEntry?.meals || []);
       const mealsEatenToday = todayMeals.length;
+      // Extract today's meal names for same-day diversity
+      const todayMealNames = todayMeals.map(m =>
+        m.description || (m.items ? m.items.map(i => i.name).join(', ') : '')
+      ).filter(Boolean);
 
       // Workout data with timestamps for pre/post-workout targeting
       const todayWorkoutCals = Store.getTodayWorkoutCalories();
@@ -144,6 +149,7 @@ const LLM = {
           recent_cuisines: recentCuisines,
           recent_protein_sources: recentProteinSources,
           meals_eaten_today: mealsEatenToday,
+          today_meal_names: todayMealNames,
           health_conditions: profile.healthConditions || [],
           activity_level: profile.activityLevel || 'moderate',
           gender: profile.gender || '',
@@ -434,7 +440,7 @@ Rules:
       };
       const prefs = Store.getPreferences();
       const mealCtx = typeof MealHistory !== 'undefined'
-        ? MealHistory.getSuggestionContext(5)
+        ? MealHistory.getSuggestionContext(7)
         : {};
 
       const res = await fetch(`${this.backendUrl}/api/recipes/suggest-llm`, {

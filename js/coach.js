@@ -9,20 +9,103 @@ const Coach = {
   lastRecipeResults: null,
   _dbReady: false,
 
+<<<<<<< Updated upstream
+=======
+  _detectMealType() {
+    const hour = new Date().getHours();
+    if (hour < 10) return 'breakfast';
+    if (hour < 14) return 'lunch';
+    if (hour < 17) return 'snack';
+    return 'dinner';
+  },
+
+  _getCoachInsight(profile, totals, remaining, todayMeals) {
+    const hour = new Date().getHours();
+    const mealType = this._detectMealType();
+    const mealsLeft = mealType === 'dinner' ? 1 : mealType === 'snack' ? 2 : mealType === 'lunch' ? 2 : 3;
+    const insights = [];
+
+    // Protein urgency
+    if (remaining.protein > 40 && mealsLeft <= 2) {
+      insights.push(`You're ${remaining.protein}g short on protein with ${mealsLeft} meal${mealsLeft > 1 ? 's' : ''} left. Prioritize high-protein options.`);
+    }
+
+    // Calorie budget
+    if (remaining.calories < 300 && mealsLeft >= 2) {
+      insights.push(`Only ${remaining.calories} cal left but ${mealsLeft} meals to go. Keep it light - lean protein and veggies.`);
+    } else if (remaining.calories > 800 && hour > 17) {
+      insights.push(`You have ${remaining.calories} cal still available. A hearty dinner is fine.`);
+    }
+
+    // Ate nothing yet
+    if (todayMeals.length === 0 && hour > 10) {
+      insights.push(`You haven't logged anything yet today. Start with a balanced ${mealType} to fuel up.`);
+    }
+
+    // Variety check from week
+    const weekMeals = this._getWeekMealNames();
+    if (weekMeals.length > 5) {
+      const freq = {};
+      weekMeals.forEach(n => { freq[n] = (freq[n] || 0) + 1; });
+      const repeated = Object.entries(freq).filter(([, c]) => c >= 3).map(([n]) => n);
+      if (repeated.length > 0) {
+        insights.push(`You've had ${repeated[0]} ${freq[repeated[0]]} times this week. Let's mix it up!`);
+      }
+    }
+
+    return insights.length > 0 ? insights[0] : `Based on your macros and the time of day, here's what I'd suggest for ${mealType}.`;
+  },
+
+  _getWeekMealNames() {
+    const names = [];
+    const data = Store.load();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      const entry = data.logs[key];
+      // Handle both formats: array (old) or {meals: [...]} (new)
+      const meals = Array.isArray(entry) ? entry : (entry?.meals || []);
+      meals.forEach(m => {
+        if (m.description) names.push(m.description);
+        else if (m.items) m.items.forEach(it => names.push(it.name || ''));
+      });
+    }
+    return names.filter(Boolean);
+  },
+
+>>>>>>> Stashed changes
   renderCoachScreen() {
+    try { return this._renderCoachScreenInner(); } catch(e) {
+      console.error('Coach screen render failed:', e);
+      const screen = UI.$('#screen-coach');
+      if (screen) screen.innerHTML = `<div class="card" style="margin:20px;padding:20px"><div class="card-title">Coach Error</div><p style="color:var(--accent-red)">${e.message}</p><button class="btn" onclick="Coach.renderCoachScreen()">Retry</button></div>`;
+    }
+  },
+  _renderCoachScreenInner() {
     const profile = Store.getProfile();
-    const totals = Store.getTodayTotals();
+    const macros = profile.macros || { calories: 0, protein: 0, carbs: 0, fat: 0 };
+    const totals = Store.getTodayTotals() || { calories: 0, protein: 0, carbs: 0, fat: 0 };
     const remaining = {
-      calories: Math.max(0, profile.macros.calories - totals.calories),
-      protein: Math.max(0, profile.macros.protein - totals.protein),
-      carbs: Math.max(0, profile.macros.carbs - totals.carbs),
-      fat: Math.max(0, profile.macros.fat - totals.fat)
+      calories: Math.max(0, macros.calories - totals.calories),
+      protein: Math.max(0, macros.protein - totals.protein),
+      carbs: Math.max(0, macros.carbs - totals.carbs),
+      fat: Math.max(0, macros.fat - totals.fat)
     };
     const prefs = Store.getPreferences();
 
+<<<<<<< Updated upstream
     // Build coaching context summary
     const condCount = (profile.healthConditions || []).length;
     const dislikedCount = (prefs.disliked || []).length;
+=======
+    // Smart context
+    const autoMealType = this._detectMealType();
+    let todayMeals = [];
+    try { todayMeals = Store.getTodayMeals() || []; } catch(e) { console.warn('getTodayMeals failed:', e); }
+    let insight = `Here's what I'd suggest for ${autoMealType}.`;
+    try { insight = this._getCoachInsight(profile, totals, remaining, todayMeals); } catch(e) { console.warn('Coach insight failed:', e); }
+>>>>>>> Stashed changes
     const goalLabel = Profile.goalLabels?.[profile.goal] || profile.goal;
     const contextParts = [goalLabel];
     if (condCount > 0) contextParts.push(`${condCount} health condition${condCount > 1 ? 's' : ''}`);
@@ -55,6 +138,7 @@ const Coach = {
         </div>
       </div>
 
+<<<<<<< Updated upstream
       <div class="card">
         <div class="card-title">What meal is this for?</div>
         <div class="meal-type-pills" id="meal-type-pills">
@@ -142,8 +226,38 @@ const Coach = {
       <button class="btn btn-outline btn-full" id="btn-meal-plan" style="margin-top:8px">
         Generate Weekly Meal Plan
       </button>
+=======
+      <!-- Hidden meal type pills for compatibility -->
+      <div style="display:none">
+        <div id="meal-type-pills">
+          <button class="meal-type-pill active" data-type="${autoMealType}"></button>
+        </div>
+      </div>
 
-      <div id="coach-results"></div>
+      <div id="coach-results">
+        <div class="card" style="text-align:center;padding:24px">
+          <span class="spinner" style="width:24px;height:24px;border-width:3px;margin-bottom:8px"></span>
+          <div style="color:var(--text-dim);font-size:13px">Finding the best meals for you...</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-outline" id="btn-ai-suggest" style="flex:1;font-size:13px">Refresh Suggestions</button>
+        <button class="btn btn-outline" id="btn-find-recipes" style="flex:1;font-size:13px">Browse Recipes</button>
+        <button class="btn btn-outline" id="btn-meal-plan" style="flex:1;font-size:13px">Weekly Plan</button>
+      </div>
+>>>>>>> Stashed changes
+
+      <!-- Hidden filter elements for compatibility -->
+      <div style="display:none">
+        <div id="diet-filter-pills"></div>
+        <div id="cuisine-filter-pills"></div>
+        <div id="time-filter-pills"><button class="meal-type-pill time-pill active" data-time="0"></button></div>
+        <div id="difficulty-filter-pills"><button class="meal-type-pill diff-pill active" data-diff=""></button></div>
+        <input id="coach-custom">
+        <input id="pantry-input">
+        <div id="pantry-tags"></div>
+      </div>
 
       ${(prefs.liked.length > 0 || prefs.disliked.length > 0) ? `
         <div class="card prefs-card">
@@ -180,11 +294,9 @@ const Coach = {
     UI.$('#btn-find-recipes')?.addEventListener('click', () => this.findRecipes());
     UI.$('#btn-ai-suggest')?.addEventListener('click', () => this.getSuggestion());
     UI.$('#btn-meal-plan')?.addEventListener('click', () => this.generateMealPlan());
-    UI.$('#btn-more-filters')?.addEventListener('click', () => {
-      const content = UI.$('#more-filters');
-      content.classList.toggle('show');
-      UI.$('#btn-more-filters .toggle-arrow').textContent = content.classList.contains('show') ? '\u25B4' : '\u25BE';
-    });
+
+    // Auto-fetch suggestions immediately
+    this.getSuggestion();
   },
 
   _bindMealTypePills() {
@@ -582,45 +694,172 @@ const Coach = {
 
   async getSuggestion() {
     const profile = Store.getProfile();
-    if (this.selectedMealTypes.length === 0) {
-      UI.toast('Pick at least one meal type', 'error');
-      return;
+    const macros = profile.macros || { calories: 0, protein: 0, carbs: 0, fat: 0 };
+    const totals = Store.getTodayTotals() || { calories: 0, protein: 0, carbs: 0, fat: 0 };
+    const remaining = {
+      calories: Math.max(0, macros.calories - totals.calories),
+      protein: Math.max(0, macros.protein - totals.protein),
+      carbs: Math.max(0, macros.carbs - totals.carbs),
+      fat: Math.max(0, macros.fat - totals.fat),
+    };
+
+    // Gather today's meals with details
+    const todayMeals = Store.getTodayMeals() || [];
+    const todayMealData = todayMeals.map(m => ({
+      name: m.description || (m.items ? m.items.map(i => i.name).join(', ') : 'Meal'),
+      calories: m.total?.calories || 0,
+      protein: m.total?.protein || 0,
+      hour: m.time ? new Date(m.time).getHours() : 12,
+    }));
+
+    // Gather week's meal names
+    const weekMeals = [];
+    const data = Store.load();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      const entry = data.logs[key];
+      const meals = Array.isArray(entry) ? entry : (entry?.meals || []);
+      meals.forEach(m => {
+        const name = m.description || (m.items ? m.items.map(i => i.name).join(', ') : '');
+        if (name) weekMeals.push(name);
+      });
     }
 
-    UI.showLoading('Finding the best meals for you...');
+    const prefs = Store.getPreferences();
+    const dietFilters = profile.dietaryPreferences?.dietaryStyle || [];
 
-    this.customRequest = UI.$('#coach-custom')?.value.trim() || '';
-    const pantry = Store.getPantry();
-    const pantryOnly = UI.$('#chk-pantry-only')?.checked || false;
-    let pantryText = '';
-    if (pantry.length > 0) {
-      pantryText = pantryOnly
-        ? `\nINGREDIENTS AVAILABLE (ONLY use these): ${pantry.join(', ')}`
-        : `\nIngredients client has at home (prefer these): ${pantry.join(', ')}`;
-    }
-    const fullCustom = (this.customRequest + pantryText).trim();
+    const container = UI.$('#coach-results');
+    container.innerHTML = `
+      <div class="card" style="text-align:center;padding:24px">
+        <span class="spinner" style="width:24px;height:24px;border-width:3px;display:inline-block;margin-bottom:8px"></span>
+        <div style="color:var(--text-dim);font-size:13px">Finding the best meals for you...</div>
+      </div>
+    `;
+
+    // Gather workout data
+    let todayWorkouts = [];
+    let lastWorkoutHoursAgo = null;
+    try {
+      const wks = Store.getTodayWorkouts ? Store.getTodayWorkouts() : [];
+      todayWorkouts = wks.map(w => ({
+        type: w.type || w.name || 'workout',
+        calories: w.calories || 0,
+        hour: w.time ? new Date(w.time).getHours() : null,
+      }));
+      if (wks.length > 0) {
+        const lastTime = new Date(wks[wks.length - 1].time);
+        lastWorkoutHoursAgo = Math.round((Date.now() - lastTime.getTime()) / 3600000 * 10) / 10;
+      }
+    } catch(e) {}
+
+    // Water intake
+    let waterMl = 0;
+    try { waterMl = Store.getTodayWater ? Store.getTodayWater() : 0; } catch(e) {}
+
+    // Weekly macro averages
+    let weeklyAvg = { days: 0, avgCal: 0, avgProtein: 0, avgCarbs: 0, avgFat: 0 };
+    try {
+      let totalDays = 0, sumCal = 0, sumProt = 0, sumCarbs = 0, sumFat = 0;
+      for (let i = 1; i <= 7; i++) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        const key = d.toISOString().split('T')[0];
+        const entry = data.logs[key];
+        const meals = Array.isArray(entry) ? entry : (entry?.meals || []);
+        if (meals.length > 0) {
+          totalDays++;
+          meals.forEach(m => {
+            sumCal += m.total?.calories || 0;
+            sumProt += m.total?.protein || 0;
+            sumCarbs += m.total?.carbs || 0;
+            sumFat += m.total?.fat || 0;
+          });
+        }
+      }
+      if (totalDays > 0) {
+        weeklyAvg = { days: totalDays, avgCal: Math.round(sumCal/totalDays), avgProtein: Math.round(sumProt/totalDays), avgCarbs: Math.round(sumCarbs/totalDays), avgFat: Math.round(sumFat/totalDays) };
+      }
+    } catch(e) {}
+
+    // Feeling patterns
+    let feelingPatterns = [];
+    try {
+      if (typeof MealHistory !== 'undefined' && MealHistory.getFeelingInsights) {
+        feelingPatterns = MealHistory.getFeelingInsights() || [];
+      }
+    } catch(e) {}
 
     try {
-      const result = await LLM.getCoachSuggestion(this.selectedMealTypes, this.selectedDietFilters, fullCustom);
+      const res = await fetch(`${LLM.backendUrl}/api/recipes/smart-suggest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hour: new Date().getHours(),
+          profile: {
+            goal: profile.goal || 'maintenance',
+            gender: profile.gender || 'unknown',
+            age: profile.age || 30,
+            weight: profile.weight || 0,
+            height: profile.height || 0,
+            activity_level: profile.activityLevel || 'moderate',
+            target_calories: macros.calories,
+            target_protein: macros.protein,
+            target_carbs: macros.carbs,
+            target_fat: macros.fat,
+          },
+          today_meals: todayMealData,
+          remaining,
+          week_meals: weekMeals,
+          liked: prefs.liked || [],
+          disliked: prefs.disliked || [],
+          diet_filters: dietFilters,
+          health_conditions: profile.healthConditions || [],
+          workouts: todayWorkouts,
+          last_workout_hours_ago: lastWorkoutHoursAgo,
+          water_ml: waterMl,
+          weekly_avg: weeklyAvg,
+          feeling_patterns: feelingPatterns,
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to get suggestions');
+      }
+
+      const result = await res.json();
       this.lastSuggestions = result;
       this.showSuggestions(result);
     } catch (err) {
-      UI.toast(err.message, 'error');
-    } finally {
-      UI.hideLoading();
+      container.innerHTML = `
+        <div class="card" style="padding:16px;text-align:center">
+          <div style="color:var(--accent-red);margin-bottom:8px">${UI.esc(err.message)}</div>
+          <button class="btn btn-outline" onclick="Coach.getSuggestion()">Try Again</button>
+        </div>
+      `;
     }
   },
 
   showSuggestions(result) {
     const container = UI.$('#coach-results');
+    const nextMeal = result.next_meal || '';
+    const mealsHad = result.meals_had_today || [];
+    const mealLabel = nextMeal.charAt(0).toUpperCase() + nextMeal.slice(1);
+
     container.innerHTML = `
+      ${result.coaching_note ? `
+        <div class="coach-insight-card card" style="margin-bottom:8px">
+          <div class="coach-insight-icon">&#129504;</div>
+          <div class="coach-insight-text">${UI.esc(result.coaching_note)}</div>
+        </div>
+      ` : ''}
       ${result.top_pick_reason ? `<div class="top-pick-banner"><div class="top-pick-label">Why #1 is your best pick right now</div><div class="top-pick-text">${UI.esc(result.top_pick_reason)}</div></div>` : ''}
-      ${result.reasoning ? `<div class="coach-reasoning">${UI.esc(result.reasoning)}</div>` : ''}
+      ${nextMeal ? `<div style="font-size:12px;color:var(--text-dim);padding:4px 0 8px;text-transform:uppercase;letter-spacing:1px;font-weight:700">${mealLabel} suggestions ${mealsHad.length > 0 ? `· Already had: ${mealsHad.join(', ')}` : ''}</div>` : ''}
       ${result.suggestions.map((s, i) => `
         <div class="suggestion-card ${i === 0 ? 'top-pick' : ''}" id="suggestion-${i}">
           <div class="suggestion-rank-badge">
-            ${i === 0 ? '#1 Best Pick' : `#${s.rank || i + 1}`}
-            <span class="sug-source ${s.source === 'llm' ? 'sug-source-llm' : 'sug-source-db'}">${s.source === 'llm' ? 'LLM' : 'DB'}</span>
+            ${i === 0 ? '#1 Best Pick' : `#${i + 1}`}
           </div>
           <div class="suggestion-header">
             <div class="suggestion-title">${UI.esc(s.name)}</div>
@@ -972,8 +1211,13 @@ const Coach = {
         </div>
         <div class="recipe-section">
           <div class="recipe-section-title">Ingredients</div>
+<<<<<<< Updated upstream
           <ul class="recipe-list">
             ${recipe.ingredients.map(ing => `<li>${UI.esc(ing)}</li>`).join('')}
+=======
+          <ul class="recipe-list" id="ings-${uid}">
+            ${recipe.ingredients.map(ing => `<li>${UI.esc(typeof ing === 'object' ? `${ing.amount || ''} ${ing.item || ''}`.trim() : String(ing))}</li>`).join('')}
+>>>>>>> Stashed changes
           </ul>
         </div>
         <div class="recipe-section">
@@ -996,5 +1240,120 @@ const Coach = {
         </div>
       </div>
     `;
+<<<<<<< Updated upstream
+=======
+  },
+
+  _bindRecipeBoxEvents(container, recipe) {
+    const uid = container.querySelector('.recipe-box')?.dataset.uid;
+    if (!uid) return;
+
+    const baseServings = parseInt(recipe.servings) || 1;
+    let currentServings = recipe.requested_servings || baseServings;
+    const ingsRaw = recipe.ingredients_raw || [];
+    const hasRawIngs = ingsRaw.length > 0 && typeof ingsRaw[0] === 'object';
+
+    const updateServings = (newVal) => {
+      currentServings = Math.max(1, Math.min(12, newVal));
+      const srvEl = UI.$(`#srv-${uid}`);
+      if (srvEl) srvEl.textContent = currentServings;
+
+      // Scale ingredients
+      if (hasRawIngs) {
+        const scale = currentServings / baseServings;
+        const ingsEl = UI.$(`#ings-${uid}`);
+        if (ingsEl) {
+          ingsEl.innerHTML = ingsRaw.map(ing => {
+            const grams = ing.grams ? Math.round(ing.grams * scale) : null;
+            const amt = ing.amount || '';
+            const scaledAmt = grams ? `${grams}g` : this._scaleAmount(amt, scale);
+            return `<li>${UI.esc(scaledAmt)} ${UI.esc(ing.item || '')}</li>`;
+          }).join('');
+        }
+      }
+
+      // Scale macros per serving stays same, total changes shown
+      const macrosEl = UI.$(`#macros-${uid}`);
+      if (macrosEl) {
+        macrosEl.innerHTML = `
+          <span style="color:var(--cal-color)">${recipe.calories} cal</span>
+          <span style="color:var(--protein-color)">${recipe.protein}g P</span>
+          <span style="color:var(--carb-color)">${recipe.carbs}g C</span>
+          <span style="color:var(--fat-color)">${recipe.fat}g F</span>
+          <span class="macro-per-note">per serving (${currentServings} servings = ${recipe.calories * currentServings} cal total)</span>
+        `;
+      }
+    };
+
+    container.querySelector('.servings-minus')?.addEventListener('click', () => updateServings(currentServings - 1));
+    container.querySelector('.servings-plus')?.addEventListener('click', () => updateServings(currentServings + 1));
+
+    // Shopping list
+    container.querySelector('.btn-shopping-list')?.addEventListener('click', () => {
+      const shopEl = UI.$(`#shop-${uid}`);
+      if (shopEl.style.display !== 'none') { shopEl.style.display = 'none'; return; }
+
+      const scale = currentServings / baseServings;
+      const categories = {};
+      const items = hasRawIngs ? ingsRaw : recipe.ingredients.map(i => typeof i === 'object' ? { item: i.item || '', amount: i.amount || '', category: i.category || 'other' } : { item: String(i), amount: '', category: 'other' });
+      items.forEach(ing => {
+        const cat = (ing.category || 'other').toLowerCase();
+        if (!categories[cat]) categories[cat] = [];
+        const grams = ing.grams ? Math.round(ing.grams * scale) : null;
+        const amt = grams ? `${grams}g` : (ing.amount ? this._scaleAmount(ing.amount, scale) : '');
+        categories[cat].push({ item: ing.item || ing, amount: amt });
+      });
+
+      const catLabels = { protein: 'Protein', produce: 'Produce', dairy: 'Dairy', grain: 'Grains & Pasta', spice: 'Spices & Seasonings', oil: 'Oils & Sauces', other: 'Other' };
+      shopEl.innerHTML = `
+        <div class="shopping-list">
+          <div class="shopping-list-header">
+            <span class="recipe-section-title">Shopping List (${currentServings} servings)</span>
+            <button class="btn btn-outline btn-copy-shop" style="font-size:11px;padding:4px 10px">Copy</button>
+          </div>
+          ${Object.entries(categories).map(([cat, items]) => `
+            <div class="shop-category">
+              <div class="shop-cat-title">${catLabels[cat] || cat}</div>
+              ${items.map(i => `
+                <label class="shop-item">
+                  <input type="checkbox" class="shop-check">
+                  <span>${UI.esc(i.amount)} ${UI.esc(typeof i.item === 'string' ? i.item : '')}</span>
+                </label>
+              `).join('')}
+            </div>
+          `).join('')}
+        </div>
+      `;
+      shopEl.style.display = 'block';
+
+      shopEl.querySelector('.btn-copy-shop')?.addEventListener('click', () => {
+        const text = Object.entries(categories).map(([cat, items]) =>
+          `${(catLabels[cat] || cat).toUpperCase()}\n${items.map(i => `  - ${i.amount} ${typeof i.item === 'string' ? i.item : ''}`).join('\n')}`
+        ).join('\n\n');
+        navigator.clipboard.writeText(text).then(() => UI.toast('Shopping list copied!', 'success'));
+      });
+    });
+
+    // Copy recipe
+    container.querySelector('.btn-copy-recipe')?.addEventListener('click', () => {
+      const fmtIng = i => typeof i === 'object' ? `${i.amount || ''} ${i.item || ''}`.trim() : String(i);
+      const text = `${recipe.name}\n\nIngredients:\n${recipe.ingredients.map(i => `- ${fmtIng(i)}`).join('\n')}\n\nInstructions:\n${recipe.steps.map((s, i) => `${i+1}. ${s}`).join('\n')}\n\nMacros per serving: ${recipe.calories} cal, ${recipe.protein}g protein, ${recipe.carbs}g carbs, ${recipe.fat}g fat`;
+      navigator.clipboard.writeText(text).then(() => UI.toast('Recipe copied!', 'success'));
+    });
+  },
+
+  _scaleAmount(amount, scale) {
+    if (!amount) return '';
+    const match = amount.match(/^([\d.\/]+)\s*(.*)/);
+    if (!match) return amount;
+    let num = parseFloat(match[1]);
+    if (match[1].includes('/')) {
+      const [n, d] = match[1].split('/');
+      num = parseFloat(n) / parseFloat(d);
+    }
+    if (isNaN(num)) return amount;
+    const scaled = Math.round(num * scale * 10) / 10;
+    return `${scaled}${match[2] ? ' ' + match[2] : ''}`;
+>>>>>>> Stashed changes
   }
 };

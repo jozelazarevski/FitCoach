@@ -74,6 +74,7 @@
     .tag-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
     .tag-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
     .tag-card h3 { font-size: 14px; color: var(--accent); margin-bottom: 12px; text-transform: capitalize; }
+    .tag-card-new { border-color: var(--accent); box-shadow: 0 0 12px rgba(108,92,231,0.15); }
     .tag-item { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
     .tag-item .name { color: var(--text); }
     .tag-item .count { color: var(--dim); }
@@ -386,6 +387,10 @@
         cuisineList = Object.keys(stats.by_cuisine || {}).sort();
       } catch {}
 
+      // Fetch sources for bulk management
+      let sourcesData = { sources: [], batches: [] };
+      try { sourcesData = await api('/recipes/sources'); } catch {}
+
       el.innerHTML = `
         <div class="filter-bar">
           <input type="text" id="search-input" placeholder="Search recipes..." value="${search}">
@@ -397,6 +402,32 @@
           </select>
           <button class="btn btn-primary btn-sm" id="btn-filter">Filter</button>
           <button class="btn btn-success btn-sm" id="btn-add-recipe">+ Add Recipe</button>
+          <button class="btn btn-primary btn-sm" id="btn-retag-recipes" style="margin-left:auto">Retag All</button>
+          <button class="btn btn-danger btn-sm" id="btn-bulk-manage">Bulk Delete</button>
+        </div>
+        <div id="bulk-panel" style="display:none">
+          <div class="stat-card" style="margin-bottom:12px;border:1px solid var(--danger, #e53935)">
+            <div class="stat-label" style="color:var(--danger, #e53935)">Bulk Recipe Management</div>
+            <div style="margin-top:12px">
+              <div style="font-size:13px;font-weight:600;margin-bottom:6px">By Source:</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+                ${sourcesData.sources.map(s => `
+                  <button class="btn btn-outline btn-sm btn-del-source" data-source="${s.source}">${s.source} (${s.count})</button>
+                `).join('') || '<span style="color:var(--dim);font-size:12px">No sources</span>'}
+              </div>
+              ${sourcesData.batches.length > 0 ? `
+                <div style="font-size:13px;font-weight:600;margin-bottom:6px">By Batch:</div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+                  ${sourcesData.batches.slice(0, 10).map(b => `
+                    <button class="btn btn-outline btn-sm btn-del-batch" data-batch="${b.batch}">${b.batch} (${b.count})</button>
+                  `).join('')}
+                </div>
+              ` : ''}
+              <div style="border-top:1px solid var(--border, #ddd);padding-top:12px;margin-top:8px">
+                <button class="btn btn-danger btn-sm" id="btn-delete-all" style="font-weight:700">Delete ALL Recipes (${data.total})</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="table-wrap">
           <div class="table-header"><h2>Recipes (${data.total})</h2></div>
@@ -438,6 +469,45 @@
       document.getElementById('filter-cuisine').onchange = () => renderRecipes(el, 1);
       document.getElementById('filter-meal').onchange = () => renderRecipes(el, 1);
       document.getElementById('btn-add-recipe').onclick = () => openRecipeModal();
+      document.getElementById('btn-retag-recipes').onclick = async () => {
+        if (!confirm('Retag all recipes with latest tag engine? This runs in background.')) return;
+        document.getElementById('btn-retag-recipes').textContent = 'Retagging...';
+        document.getElementById('btn-retag-recipes').disabled = true;
+        try {
+          const res = await api('/retag', { method: 'POST', body: JSON.stringify({}) });
+          toast(res.message || 'Retagging started');
+          setTimeout(() => { document.getElementById('btn-retag-recipes').textContent = 'Retag All'; document.getElementById('btn-retag-recipes').disabled = false; }, 5000);
+        } catch (e) { toast(e.message, true); document.getElementById('btn-retag-recipes').textContent = 'Retag All'; document.getElementById('btn-retag-recipes').disabled = false; }
+      };
+      document.getElementById('btn-bulk-manage').onclick = () => {
+        const panel = document.getElementById('bulk-panel');
+        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+      };
+      document.getElementById('btn-delete-all')?.addEventListener('click', async () => {
+        if (!confirm('DELETE ALL RECIPES? This cannot be undone!')) return;
+        if (!confirm('Are you absolutely sure? This will remove every recipe from the database.')) return;
+        const result = await api('/recipes/bulk-delete', { method: 'POST', body: JSON.stringify({ mode: 'all' }) });
+        toast(result.message);
+        renderRecipes(el, 1);
+      });
+      el.querySelectorAll('.btn-del-source').forEach(b => {
+        b.onclick = async () => {
+          const src = b.dataset.source;
+          if (!confirm(`Delete all recipes from source "${src}"?`)) return;
+          const result = await api('/recipes/bulk-delete', { method: 'POST', body: JSON.stringify({ mode: 'source', source: src }) });
+          toast(result.message);
+          renderRecipes(el, 1);
+        };
+      });
+      el.querySelectorAll('.btn-del-batch').forEach(b => {
+        b.onclick = async () => {
+          const batch = b.dataset.batch;
+          if (!confirm(`Delete all recipes from batch "${batch}"?`)) return;
+          const result = await api('/recipes/bulk-delete', { method: 'POST', body: JSON.stringify({ mode: 'batch', batch }) });
+          toast(result.message);
+          renderRecipes(el, 1);
+        };
+      });
       el.querySelectorAll('.page-btn').forEach(b => b.onclick = () => renderRecipes(el, +b.dataset.page));
       el.querySelectorAll('.btn-edit').forEach(b => b.onclick = () => openRecipeModal(+b.dataset.id));
       el.querySelectorAll('.btn-delete').forEach(b => b.onclick = async () => {
@@ -523,31 +593,77 @@
 
     // Tags
     async function renderTags(el) {
-      const tags = await api('/tags');
+      const tags = await api('/tags/full');
       const dims = Object.keys(tags).sort();
+      const totalTags = dims.reduce((sum, d) => sum + tags[d].length, 0);
+      const totalAssignments = dims.reduce((sum, d) => sum + tags[d].reduce((s, t) => s + t.count, 0), 0);
+
+      // Highlight new dimensions
+      const newDims = ['meal_suitability', 'flavor_profile', 'prep_style', 'primary_protein', 'equipment_needs'];
 
       el.innerHTML = `
-        <h2 style="margin-bottom:16px">Tag Dimensions (${dims.length})</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+          <div>
+            <h2 style="margin:0">Tag Dimensions (${dims.length})</h2>
+            <div style="font-size:13px;color:var(--dim)">${totalTags} unique tags, ${totalAssignments.toLocaleString()} total assignments</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-sm" id="btn-retag-all">Retag All Recipes</button>
+            <button class="btn btn-outline btn-sm" id="btn-retag-missing">Retag Missing Only</button>
+          </div>
+        </div>
+        <div id="retag-status" style="display:none;padding:10px;margin-bottom:12px;border-radius:8px;background:rgba(76,175,80,0.1);color:#4caf50;font-size:13px"></div>
         <div class="tag-grid">
           ${dims.map(dim => {
-            const entries = Object.entries(tags[dim]).sort((a, b) => b[1] - a[1]);
-            const maxCount = entries[0]?.[1] || 1;
+            const entries = tags[dim] || [];
+            const maxCount = entries[0]?.count || 1;
+            const isNew = newDims.includes(dim);
             return `
-              <div class="tag-card">
-                <h3>${dim.replace(/_/g, ' ')} (${entries.length})</h3>
-                ${entries.slice(0, 15).map(([tag, count]) => `
+              <div class="tag-card ${isNew ? 'tag-card-new' : ''}">
+                <h3>${dim.replace(/_/g, ' ')} (${entries.length})${isNew ? ' <span style="font-size:10px;background:#6c5ce7;color:#fff;padding:2px 6px;border-radius:8px;font-weight:400">NEW</span>' : ''}</h3>
+                ${entries.slice(0, 20).map(t => `
                   <div class="tag-item">
-                    <span class="name">${tag.replace(/_/g, ' ')}</span>
-                    <span class="count">${count}</span>
+                    <span class="name">${t.tag.replace(/_/g, ' ')}</span>
+                    <span class="count">${t.count}</span>
                   </div>
-                  <div class="tag-bar"><div class="tag-bar-fill" style="width:${(count/maxCount*100).toFixed(0)}%"></div></div>
+                  <div class="tag-bar"><div class="tag-bar-fill" style="width:${(t.count/maxCount*100).toFixed(0)}%"></div></div>
                 `).join('')}
-                ${entries.length > 15 ? `<div style="font-size:12px;color:var(--dim);margin-top:8px">+${entries.length - 15} more</div>` : ''}
+                ${entries.length > 20 ? `<div style="font-size:12px;color:var(--dim);margin-top:8px">+${entries.length - 20} more</div>` : ''}
               </div>
             `;
           }).join('')}
         </div>
       `;
+
+      document.getElementById('btn-retag-all')?.addEventListener('click', async () => {
+        if (!confirm('Retag ALL recipes? This may take a few minutes for large databases.')) return;
+        const status = document.getElementById('retag-status');
+        status.style.display = 'block';
+        status.textContent = 'Retagging started... Check server logs for progress.';
+        try {
+          const res = await api('/retag', { method: 'POST', body: JSON.stringify({}) });
+          status.textContent = res.message || 'Retagging in progress...';
+          // Refresh after a delay
+          setTimeout(() => renderTags(el), 5000);
+        } catch (e) {
+          status.style.color = '#e53935';
+          status.textContent = 'Error: ' + e.message;
+        }
+      });
+
+      document.getElementById('btn-retag-missing')?.addEventListener('click', async () => {
+        const status = document.getElementById('retag-status');
+        status.style.display = 'block';
+        status.textContent = 'Retagging recipes with missing tags...';
+        try {
+          const res = await api('/retag', { method: 'POST', body: JSON.stringify({ missing_only: true }) });
+          status.textContent = res.message || 'Retagging in progress...';
+          setTimeout(() => renderTags(el), 5000);
+        } catch (e) {
+          status.style.color = '#e53935';
+          status.textContent = 'Error: ' + e.message;
+        }
+      });
     }
 
     // API Keys

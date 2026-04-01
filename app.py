@@ -175,6 +175,7 @@ def cors_preflight(path):
 
 # Serve frontend
 @app.route('/')
+@app.route('/index.html')
 def index():
     return send_from_directory('.', 'index.html')
 
@@ -267,24 +268,25 @@ def server_error(e):
         },
         exc_info=True,
     )
-    return jsonify({'error': 'Internal server error'}), 500
+    return jsonify({'error': f'Server error: {e}'}), 500
 
 
 @app.errorhandler(Exception)
 def handle_exception(e):
     """Catch-all error handler for unhandled exceptions."""
+    import traceback
+    tb = traceback.format_exc()
     logger.error(
-        "Unhandled exception: %s: %s",
-        type(e).__name__, str(e),
+        "Unhandled exception: %s: %s\n%s",
+        type(e).__name__, str(e), tb,
         extra={
             'request_id': getattr(g, 'request_id', ''),
             'endpoint': request.path,
             'method': request.method,
             'client_ip': request.remote_addr,
         },
-        exc_info=True,
     )
-    return jsonify({'error': 'Internal server error'}), 500
+    return jsonify({'error': f'{type(e).__name__}: {e}'}), 500
 
 
 if __name__ == '__main__':

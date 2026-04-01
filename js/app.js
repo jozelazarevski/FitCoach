@@ -139,7 +139,11 @@ const App = {
 
       ${typeof MealHistory !== 'undefined' ? MealHistory.renderInsightsCard() : ''}
 
+      ${this._renderCoachingInsights(totals, targets, meals)}
+
       ${this._renderMacroGapCard(totals, targets)}
+
+      ${this._renderWeeklySummary(targets)}
 
       <button class="btn btn-coach" id="btn-dashboard-coach">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
@@ -160,6 +164,208 @@ const App = {
     });
 
     UI.$('#btn-gap-advisor')?.addEventListener('click', () => this.getGapAdvice());
+  },
+
+  _renderWeeklySummary(targets) {
+    try {
+      const data = Store.load();
+      const days = [];
+      for (let i = 1; i <= 7; i++) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        const key = d.toISOString().split('T')[0];
+        const entry = data.logs[key];
+        const meals = Array.isArray(entry) ? entry : (entry?.meals || []);
+        if (meals.length > 0) {
+          const dayCal = meals.reduce((s, m) => s + (m.total?.calories || 0), 0);
+          const dayProt = meals.reduce((s, m) => s + (m.total?.protein || 0), 0);
+          const dayCarbs = meals.reduce((s, m) => s + (m.total?.carbs || 0), 0);
+          const dayFat = meals.reduce((s, m) => s + (m.total?.fat || 0), 0);
+          const hitCal = Math.abs(dayCal - targets.calories) < targets.calories * 0.15;
+          const hitProt = dayProt >= targets.protein * 0.85;
+          days.push({ cal: dayCal, prot: dayProt, carbs: dayCarbs, fat: dayFat, hitCal, hitProt });
+        }
+      }
+      if (days.length < 2) return '';
+
+      const avgCal = Math.round(days.reduce((s, d) => s + d.cal, 0) / days.length);
+      const avgProt = Math.round(days.reduce((s, d) => s + d.prot, 0) / days.length);
+      const calHitDays = days.filter(d => d.hitCal).length;
+      const protHitDays = days.filter(d => d.hitProt).length;
+      const consistency = Math.round(((calHitDays + protHitDays) / (days.length * 2)) * 100);
+
+      // Actionable tip
+      let tip = '';
+      if (protHitDays < days.length * 0.5) {
+        tip = 'Protein has been consistently low. Try adding a protein source to every meal — eggs at breakfast, chicken at lunch, Greek yogurt as snack.';
+      } else if (avgCal > targets.calories * 1.1) {
+        tip = 'Calories trending above target. Try slightly smaller portions or swapping one snack for a lower-cal option.';
+      } else if (consistency >= 80) {
+        tip = 'Excellent consistency! Your nutrition discipline is paying off. Keep this rhythm going.';
+      } else {
+        tip = 'Focus on hitting protein first, then fill remaining calories with balanced carbs and fats.';
+      }
+
+      return `
+        <div class="card">
+          <div class="card-title">Weekly Summary (${days.length} days)</div>
+          <div class="weekly-stats-grid">
+            <div class="weekly-stat">
+              <div class="weekly-stat-val" style="color:var(--cal-color)">${avgCal}</div>
+              <div class="weekly-stat-label">avg cal/day</div>
+              <div class="weekly-stat-target">${targets.calories > 0 ? (avgCal > targets.calories ? '↑' : '↓') + ' target ' + targets.calories : ''}</div>
+            </div>
+            <div class="weekly-stat">
+              <div class="weekly-stat-val" style="color:var(--protein-color)">${avgProt}g</div>
+              <div class="weekly-stat-label">avg protein</div>
+              <div class="weekly-stat-target">${targets.protein > 0 ? (avgProt >= targets.protein * 0.85 ? '&#9989;' : '&#9888;') + ' target ' + targets.protein + 'g' : ''}</div>
+            </div>
+            <div class="weekly-stat">
+              <div class="weekly-stat-val" style="color:var(--primary)">${consistency}%</div>
+              <div class="weekly-stat-label">consistency</div>
+              <div class="weekly-stat-target">${calHitDays}/${days.length} cal + ${protHitDays}/${days.length} prot</div>
+            </div>
+          </div>
+          <div class="weekly-tip">${tip}</div>
+        </div>
+      `;
+    } catch(e) {
+      return '';
+    }
+  },
+
+  _renderCoachingInsights(totals, targets, meals) {
+    const hour = new Date().getHours();
+    const profile = Store.getProfile();
+    const insights = [];
+
+    // Macro pacing
+    const dayProgress = Math.min(hour / 21, 1.0);
+    const calPacing = totals.calories / Math.max(targets.calories, 1);
+    const protPacing = totals.protein / Math.max(targets.protein, 1);
+
+    if (dayProgress > 0.4 && protPacing < dayProgress * 0.5 && targets.protein > 0) {
+      insights.push({
+        icon: '&#9888;&#65039;',
+        text: `Protein behind schedule — ${totals.protein}g eaten (${Math.round(protPacing*100)}%) but ${Math.round(dayProgress*100)}% of day is done. Focus on high-protein meals.`,
+        type: 'warning'
+      });
+    }
+
+    if (dayProgress > 0.6 && calPacing > 0.9 && targets.calories > 0) {
+      insights.push({
+        icon: '&#9888;&#65039;',
+        text: `Already at ${Math.round(calPacing*100)}% of calorie target. Keep remaining meals very light and protein-focused.`,
+        type: 'warning'
+      });
+    }
+
+    // Meal timing
+    if (hour >= 13 && meals.length === 0) {
+      insights.push({
+        icon: '&#9200;',
+        text: 'No meals logged yet today. Skipping meals can lead to overeating later — grab something balanced now.',
+        type: 'alert'
+      });
+    } else if (hour >= 11 && meals.length === 1 && totals.calories < 300) {
+      insights.push({
+        icon: '&#127860;',
+        text: 'Light breakfast so far. Time for a protein-rich lunch to keep energy steady.',
+        type: 'info'
+      });
+    }
+
+    // Workout awareness
+    try {
+      const todayWorkouts = Store.getTodayWorkouts ? Store.getTodayWorkouts() : [];
+      if (todayWorkouts.length > 0) {
+        const lastW = todayWorkouts[todayWorkouts.length - 1];
+        const hoursAgo = (Date.now() - new Date(lastW.time).getTime()) / 3600000;
+        if (hoursAgo < 2) {
+          insights.push({
+            icon: '&#128170;',
+            text: `Workout ${Math.round(hoursAgo * 60)} min ago — eat protein + carbs within 2 hours for optimal recovery.`,
+            type: 'workout'
+          });
+        } else if (totals.protein < targets.protein * 0.5) {
+          insights.push({
+            icon: '&#128170;',
+            text: 'You worked out today but protein is low. Prioritize protein in your next meal for recovery.',
+            type: 'workout'
+          });
+        }
+      }
+    } catch(e) {}
+
+    // Hydration
+    try {
+      const water = Store.getTodayWater ? Store.getTodayWater() : 0;
+      if (water < 500 && hour > 12) {
+        insights.push({
+          icon: '&#128167;',
+          text: `Only ${water}ml water today. Aim for at least 2L — dehydration hurts performance and recovery.`,
+          type: 'hydration'
+        });
+      }
+    } catch(e) {}
+
+    // Weekly protein trend
+    try {
+      const data = Store.load();
+      let protDays = 0, lowProtDays = 0;
+      for (let i = 1; i <= 7; i++) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        const key = d.toISOString().split('T')[0];
+        const entry = data.logs[key];
+        const dayMeals = Array.isArray(entry) ? entry : (entry?.meals || []);
+        if (dayMeals.length > 0) {
+          protDays++;
+          const dayProt = dayMeals.reduce((sum, m) => sum + (m.total?.protein || 0), 0);
+          if (dayProt < targets.protein * 0.8) lowProtDays++;
+        }
+      }
+      if (protDays >= 3 && lowProtDays >= Math.ceil(protDays * 0.5)) {
+        insights.push({
+          icon: '&#128200;',
+          text: `Weekly trend: protein was below target ${lowProtDays} of ${protDays} days. Consistently hitting protein is key for ${profile.goal === 'fat_loss' ? 'preserving muscle during fat loss' : 'muscle growth'}.`,
+          type: 'trend'
+        });
+      }
+    } catch(e) {}
+
+    if (insights.length === 0) {
+      // Positive reinforcement
+      if (meals.length >= 2 && protPacing >= dayProgress * 0.8) {
+        insights.push({
+          icon: '&#9989;',
+          text: 'Great macro pacing today! You\'re on track with protein. Keep it up.',
+          type: 'positive'
+        });
+      } else {
+        return '';
+      }
+    }
+
+    const typeColors = {
+      warning: 'var(--accent-orange)',
+      alert: 'var(--accent-red)',
+      workout: 'var(--primary)',
+      hydration: 'var(--accent-blue)',
+      trend: 'var(--protein-color)',
+      info: 'var(--text-dim)',
+      positive: 'var(--accent-green)',
+    };
+
+    return `
+      <div class="card coaching-insights-card">
+        <div class="card-title">Coach Insights</div>
+        ${insights.slice(0, 3).map(i => `
+          <div class="coaching-insight" style="border-left: 3px solid ${typeColors[i.type] || 'var(--border)'}">
+            <span class="coaching-insight-icon">${i.icon}</span>
+            <span class="coaching-insight-text">${i.text}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
   },
 
   _renderMacroGapCard(totals, targets) {
@@ -203,13 +409,6 @@ const App = {
   },
 
   async getGapAdvice() {
-    const profile = Store.getProfile();
-    if (!profile.apiKey) {
-      UI.toast('Set your API key in Profile first', 'error');
-      App.navigate('profile');
-      return;
-    }
-
     const btn = UI.$('#btn-gap-advisor');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Thinking...';

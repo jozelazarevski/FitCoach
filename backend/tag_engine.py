@@ -1,7 +1,9 @@
 """
-Tag Engine - Computes 200+ tags across 20+ dimensions for recipes.
+Tag Engine - Computes 250+ tags across 25 dimensions for recipes.
 Ported from the standalone tagging script for SQLite integration.
 """
+
+import json
 
 CUISINE_KEYWORDS = {
     "thai": {"cuisine": "Thai", "region": "Southeast Asia", "country": "Thailand"},
@@ -647,5 +649,183 @@ def compute_deterministic_tags(recipe):
     if servings <= 2: portion.append("small_batch")
     portion.append("scalable")
     tags["portion"] = portion
+
+    # ═══════════════════════════════════════════════════
+    #  NEW ADVANCED DIMENSIONS (21-25)
+    # ═══════════════════════════════════════════════════
+
+    name_lower = recipe.get("name", "").lower()
+    ing_str_lower = ing_str.lower() if ing_str else ""
+    steps_text = " ".join(
+        s if isinstance(s, str) else s.get("text", "")
+        for s in recipe.get("steps", [])
+    ).lower()
+    recipe_meal = recipe.get("meal_type", "any").lower()
+    all_text = f"{name_lower} {ing_str_lower}"
+
+    # ── 21. MEAL SUITABILITY ──
+    _BREAKFAST_KW = {"oat", "oats", "oatmeal", "egg", "eggs", "omelet", "omelette",
+                     "pancake", "waffle", "toast", "cereal", "granola", "yogurt",
+                     "smoothie", "muesli", "porridge", "bagel", "croissant",
+                     "french toast", "scramble", "frittata", "hash brown",
+                     "breakfast", "morning", "brunch", "muffin", "acai"}
+    _HEAVY_DINNER_KW = {"steak", "lamb", "ribs", "roast", "casserole", "stew",
+                        "curry", "chops", "short rib", "brisket", "meatball",
+                        "meatloaf", "pot pie", "ragu", "bolognese", "braised",
+                        "lasagna", "shepherd", "wellington", "osso buco"}
+    _LUNCH_KW = {"salad", "sandwich", "wrap", "bowl", "soup", "grain bowl",
+                 "pita", "panini", "quesadilla", "taco", "burrito"}
+    _SNACK_KW = {"bar", "bite", "bites", "dip", "trail mix", "energy ball",
+                 "cracker", "chip", "popcorn", "hummus", "guacamole", "nuts"}
+
+    meal_suit = []
+    is_breakfast_food = any(kw in all_text for kw in _BREAKFAST_KW)
+    is_heavy_dinner = any(kw in all_text for kw in _HEAVY_DINNER_KW)
+    is_lunch_food = any(kw in all_text for kw in _LUNCH_KW)
+    is_snack_food = any(kw in all_text for kw in _SNACK_KW) or cal < 200
+
+    if recipe_meal == "breakfast":
+        meal_suit.append("breakfast_suitable")
+    if is_breakfast_food and not is_heavy_dinner:
+        meal_suit.append("breakfast_suitable")
+    if (total_time <= 15 and cal <= 400 and not is_heavy_dinner):
+        meal_suit.append("breakfast_suitable")
+
+    if is_lunch_food or (300 <= cal <= 600 and total_time <= 35):
+        meal_suit.append("lunch_suitable")
+    if recipe_meal in ("lunch", "any"):
+        meal_suit.append("lunch_suitable")
+
+    if is_heavy_dinner or cook_time >= 30 or cal >= 400:
+        meal_suit.append("dinner_suitable")
+    if recipe_meal in ("dinner", "any"):
+        meal_suit.append("dinner_suitable")
+
+    if is_snack_food or cal <= 250:
+        meal_suit.append("snack_suitable")
+    if recipe_meal == "snack":
+        meal_suit.append("snack_suitable")
+
+    if "breakfast_suitable" in meal_suit and 200 <= cal <= 500:
+        meal_suit.append("brunch_suitable")
+
+    if total_time <= 15 and cal <= 400:
+        meal_suit.append("late_night_suitable")
+
+    # Hard exclusions
+    if is_heavy_dinner and "breakfast_suitable" in meal_suit:
+        meal_suit = [m for m in meal_suit if m != "breakfast_suitable"]
+
+    # Ensure at least one suitability
+    if not meal_suit:
+        meal_suit.append("dinner_suitable")
+        meal_suit.append("lunch_suitable")
+
+    tags["meal_suitability"] = list(set(meal_suit))
+
+    # ── 22. FLAVOR PROFILE ──
+    _FLAVOR_MAP = {
+        "savory": {"soy sauce", "worcestershire", "broth", "stock", "miso", "anchovy", "bacon", "ham", "parmesan"},
+        "sweet": {"sugar", "honey", "maple", "chocolate", "vanilla", "caramel", "molasses", "agave", "date", "banana", "berry", "apple"},
+        "sour": {"lemon", "lime", "vinegar", "tamarind", "pickle", "sauerkraut", "cranberry"},
+        "umami": {"mushroom", "soy sauce", "miso", "parmesan", "tomato paste", "anchovy", "fish sauce", "worcestershire", "seaweed", "nori"},
+        "smoky": {"smoked", "chipotle", "paprika", "bbq", "barbecue", "mesquite", "charred", "grilled"},
+        "herbal": {"basil", "cilantro", "parsley", "dill", "thyme", "rosemary", "oregano", "mint", "sage", "tarragon", "chive"},
+        "citrusy": {"lemon", "lime", "orange", "grapefruit", "yuzu", "citrus", "zest"},
+        "garlicky": {"garlic"},
+        "cheesy": {"cheese", "cheddar", "mozzarella", "parmesan", "gruyere", "feta", "gouda", "brie", "ricotta", "goat cheese"},
+        "nutty": {"almond", "walnut", "pecan", "cashew", "pistachio", "peanut", "hazelnut", "tahini", "sesame"},
+        "earthy": {"mushroom", "beet", "lentil", "truffle", "cumin", "turmeric", "root vegetable"},
+        "fruity": {"berry", "mango", "pineapple", "peach", "apple", "pear", "fig", "plum", "cherry", "passion fruit"},
+        "spicy_hot": {"chili", "jalapeno", "habanero", "sriracha", "cayenne", "hot sauce", "ghost pepper", "scotch bonnet", "wasabi", "horseradish"},
+        "mildly_spiced": {"cinnamon", "nutmeg", "cardamom", "allspice", "clove", "ginger", "coriander", "fennel"},
+    }
+    flavor = []
+    for flav, keywords in _FLAVOR_MAP.items():
+        if any(kw in all_text for kw in keywords):
+            flavor.append(flav)
+    if not flavor:
+        flavor.append("plain")
+    tags["flavor_profile"] = flavor
+
+    # ── 23. PREP STYLE ──
+    prep_style = []
+    if cook_time == 0 and prep_time <= 10:
+        prep_style.append("no_cook")
+    if cook_time <= 10 and cook_time > 0:
+        prep_style.append("minimal_cooking")
+    if any(kw in steps_text for kw in ["refrigerat", "chill", "overnight", "let sit", "rest in fridge"]):
+        prep_style.append("requires_chilling")
+    if any(kw in steps_text for kw in ["marinat", "marinate", "brine"]):
+        prep_style.append("requires_marinating")
+    if any(kw in all_text for kw in ["one pot", "one pan", "one-pot", "one-pan", "sheet pan"]):
+        prep_style.append("one_pot")
+    if prep_time <= 5 and cook_time >= 20:
+        prep_style.append("hands_off")
+    if prep_time >= 20:
+        prep_style.append("active_cooking")
+    if any(kw in all_text for kw in ["make ahead", "meal prep", "batch cook", "freeze"]):
+        prep_style.append("make_ahead")
+    if not prep_style:
+        prep_style.append("active_cooking")
+    tags["prep_style"] = list(set(prep_style))
+
+    # ── 24. PRIMARY PROTEIN ──
+    _PROTEIN_DETECT = [
+        ("chicken", {"chicken", "poultry"}),
+        ("beef", {"beef", "steak", "ground beef", "brisket", "sirloin", "ribeye"}),
+        ("pork", {"pork", "bacon", "ham", "sausage", "prosciutto", "chorizo"}),
+        ("lamb", {"lamb"}),
+        ("turkey", {"turkey"}),
+        ("salmon", {"salmon"}),
+        ("tuna", {"tuna"}),
+        ("shrimp", {"shrimp", "prawn", "prawns"}),
+        ("white_fish", {"cod", "tilapia", "halibut", "bass", "snapper", "haddock", "catfish", "mahi", "swordfish", "trout"}),
+        ("tofu", {"tofu", "tempeh", "seitan"}),
+        ("eggs", {"egg", "eggs"}),
+        ("lentils", {"lentil", "lentils", "dal", "daal"}),
+        ("beans", {"bean", "beans", "chickpea", "chickpeas", "black bean", "kidney bean"}),
+        ("cheese", {"cheese", "paneer", "halloumi", "ricotta"}),
+    ]
+    primary_prot = "none"
+    # Check ingredients first (more reliable), then name
+    for prot_name, keywords in _PROTEIN_DETECT:
+        if any(kw in ing_str_lower for kw in keywords):
+            primary_prot = prot_name
+            break
+    if primary_prot == "none":
+        for prot_name, keywords in _PROTEIN_DETECT:
+            if any(kw in name_lower for kw in keywords):
+                primary_prot = prot_name
+                break
+    tags["primary_protein"] = primary_prot
+
+    # ── 25. EQUIPMENT NEEDS ──
+    equip_col = recipe.get("equipment", [])
+    if isinstance(equip_col, str):
+        try:
+            equip_col = json.loads(equip_col)
+        except (json.JSONDecodeError, TypeError):
+            equip_col = []
+    equip_text = " ".join(str(e).lower() for e in equip_col) + " " + steps_text
+
+    equip_tags = []
+    if any(kw in equip_text for kw in ["oven", "bake", "roast", "broil"]):
+        equip_tags.append("oven_required")
+    if any(kw in equip_text for kw in ["grill", "bbq", "barbecue"]):
+        equip_tags.append("grill_required")
+    if any(kw in equip_text for kw in ["blender", "food processor", "blend"]):
+        equip_tags.append("blender_required")
+    if any(kw in equip_text for kw in ["instant pot", "pressure cooker"]):
+        equip_tags.append("instant_pot")
+    if any(kw in equip_text for kw in ["slow cooker", "crock pot", "crockpot"]):
+        equip_tags.append("slow_cooker")
+    if any(kw in equip_text for kw in ["air fryer", "air fry"]):
+        equip_tags.append("air_fryer")
+    if any(kw in equip_text for kw in ["pan", "skillet", "saut", "stir fry", "wok", "stovetop"]):
+        equip_tags.append("stovetop_only")
+    if not equip_tags:
+        equip_tags.append("no_special_equipment")
+    tags["equipment_needs"] = equip_tags
 
     return tags
